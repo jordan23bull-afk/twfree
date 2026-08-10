@@ -216,8 +216,8 @@ function updateCandle(ts, price, size) {
   const last = state.data[state.data.length - 1];
   if (!last) return;
   if (bucket > last.time) {                      // новая свеча
-    const c = { time: bucket, open: last.close,
-      high: Math.max(last.close, price), low: Math.min(last.close, price),
+    const c = { time: bucket, open: price,
+      high: price, low: price,
       close: price, volume: size };
     state.data.push(c);
     candleSeries.update(c);
