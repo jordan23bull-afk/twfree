@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ROSN — ПАО НК «Роснефть» · MOEX · real-time</title>
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  :root{
+    --bg:#0b0d10; --panel:#10141a; --border:#1c232b; --text:#d1d4dc; --muted:#787b86;
+    --green:#089982; --red:#f23645; --blue:#2962ff; --yellow:#f7a600;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:var(--bg);color:var(--text);font-family:"Trebuchet MS","Segoe UI",Roboto,Arial,sans-serif;display:flex;flex-direction:column;overflow:hidden}
+  header{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:8px 14px;background:var(--panel);border-bottom:1px solid var(--border)}
+  .logo{width:34px;height:34px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#ffd75e,var(--yellow) 60%,#b26a00);color:#1b1400;font-weight:700;display:flex;align-items:center;justify-content:center;font-size:13px;flex:0 0 auto}
+  .tick-name{font-weight:700;font-size:14px}
+  .tick-sub{font-size:11px;color:var(--muted)}
+  .quote{display:flex;align-items:baseline;gap:10px;margin-left:6px}
+  .last{font-size:20px;font-weight:700;letter-spacing:.3px}
+  .change{font-size:12px;font-weight:600;padding:3px 8px;border-radius:4px}
+  .up{color:var(--green)} .down{color:var(--red)}
+  .change.up{background:rgba(8,153,130,.12)} .change.down{background:rgba(242,54,69,.12)}
+  .trade{display:flex;gap:8px}
+  .trade button{min-width:88px;padding:4px 10px;border-radius:6px;background:transparent;cursor:pointer;display:flex;flex-direction:column;align-items:center;line-height:1.15;font:inherit;font-size:13px;font-weight:700}
+  .trade small{font-size:9px;letter-spacing:.8px;font-weight:600}
+  .trade .sell{border:1px solid var(--red);color:var(--red)}
+  .trade .buy{border:1px solid var(--blue);color:#4f8cff}
+  .trade button:hover{filter:brightness(1.25)}
+  .spacer{flex:1}
+  .tf-group{display:flex;border:1px solid var(--border);border-radius:6px;overflow:hidden}
+  .tf-group button{background:transparent;border:0;color:var(--muted);cursor:pointer;padding:6px 14px;font:inherit;font-size:12px;font-weight:700}
+  .tf-group button + button{border-left:1px solid var(--border)}
+  .tf-group button:hover{color:var(--text)}
+  .tf-group button.active{background:#1f2733;color:#fff}
+  .live{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--green)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--green);animation:pulse 1.6s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(8,153,130,.5)}70%{box-shadow:0 0 0 8px rgba(8,153,130,0)}100%{box-shadow:0 0 0 0 rgba(8,153,130,0)}}
+  #wrap{position:relative;flex:1;min-height:0}
+  #chart{position:absolute;inset:0}
+  .legend{position:absolute;top:10px;left:12px;z-index:2;pointer-events:none;font-size:11px;color:var(--muted);text-shadow:0 1px 2px #000}
+  .legend .title{font-size:12px;color:var(--text);font-weight:700;margin-bottom:4px}
+  .legend b{font-weight:600}
+  footer{display:flex;justify-content:space-between;gap:10px;padding:5px 14px;font-size:11px;color:var(--muted);background:var(--panel);border-top:1px solid var(--border)}
+  #error{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(11,13,16,.8);z-index:5;color:var(--red);font-size:14px;text-align:center;padding:20px}
+  [hidden]{display:none !important}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">RN</div>
+  <div>
+    <div class="tick-name">ПАО НК «Роснефть»</div>
+    <div class="tick-sub">ROSN · MOEX (TQBR) · real-time</div>
+  </div>
+  <div class="quote">
+    <div id="last" class="last">—</div>
+    <div id="change" class="change">—</div>
+  </div>
+  <div class="trade">
+    <button class="sell"><small>ПРОДАТЬ</small><span id="bid">—</span></button>
+    <button class="buy"><small>КУПИТЬ</small><span id="ask">—</span></button>
+  </div>
+  <div class="spacer"></div>
+  <div class="tf-group" id="tf">
+    <button data-tf="1" class="active">1 мин</button>
+    <button data-tf="5">5 мин</button>
+  </div>
+  <div class="live"><span class="dot"></span>LIVE</div>
+</header>
+
+<div id="wrap">
+  <div id="chart"></div>
+  <div class="legend">
+    <div class="title">ПАО НК «Роснефть» · <span id="legend-tf">1 мин</span> · MOEX</div>
+    <div id="legend-ohlc"></div>
+    <div id="legend-time"></div>
+  </div>
+  <div id="error" hidden></div>
+</div>
+
+<footer>
+  <span id="upd">Загрузка данных MOEX…</span>
+  <span>Источник: MOEX ISS · Lightweight Charts (TradingView)</span>
+</footer>
+
+<script>
+(() => {
+'use strict';
+
+const SECID = 'ROSN';
+const ISS = 'https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities/';
+const POLL_MS = 4000;        // опрос котировок (real-time)
+const REFRESH_MS = 180000;   // полная перезагрузка истории
+const VOL_COLOR = 'rgba(125,135,148,0.45)';
+
+const state = { tf: 1, base: [], data: [], last: null };
+
+const $ = id => document.getElementById(id);
+const fmt = v => (v == null || isNaN(v)) ? '—' :
+  v.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Время биржи (МСК) показываем «как есть»: строку MOEX парсим как UTC
+const parseTs = s => Math.floor(Date.parse(String(s).replace(' ', 'T') + 'Z') / 1000);
+const fmtTime = t => { const s = new Date(t * 1000).toISOString();
+  return s.slice(8,10)+'.'+s.slice(5,7)+'.'+s.slice(0,4)+' '+s.slice(11,16); };
+
+/* ================= график ================= */
+const chart = LightweightCharts.createChart($('chart'), {
+  autoSize: true,
+  layout: { background: { type: 'solid', color: '#0b0d10' }, textColor: '#8b919c', fontSize: 11 },
+  grid: { vertLines: { color: '#151a20' }, horzLines: { color: '#151a20' } },
+  rightPriceScale: { borderColor: '#1c232b', scaleMargins: { top: .08, bottom: .24 } },
+  timeScale: { borderColor: '#1c232b', timeVisible: true, secondsVisible: false, rightOffset: 6, barSpacing: 7 },
+  crosshair: {
+    mode: LightweightCharts.CrosshairMode.Normal,
+    vert: { color: '#2b333d', labelBackgroundColor: '#2b333d' },
+    horz: { color: '#2b333d', labelBackgroundColor: '#2b333d' }
+  },
+  localization: { locale: 'ru-RU', priceFormatter: v => fmt(v) }
+});
+
+const candleSeries = chart.addCandlestickSeries({
+  upColor: '#089982', downColor: '#f23645',
+  wickUpColor: '#089982', wickDownColor: '#f23645',
+  borderVisible: false, priceLineColor: '#404a58'
+});
+
+const volSeries = chart.addHistogramSeries({
+  priceScaleId: 'vol', priceFormat: { type: 'volume' },
+  lastValueVisible: false, priceVisible: false
+});
+chart.priceScale('vol').applyOptions({ scaleMargins: { top: .82, bottom: 0 } });
+
+chart.subscribeCrosshairMove(p => {
+  const c = p && p.seriesData.get(candleSeries);
+  setLegend(c && c.open != null ? c : state.data[state.data.length - 1], p && p.time);
+});
+
+/* ============ история: MOEX ISS (1-мин свечи) ============ */
+async function loadHistory() {
+  const now = Date.now();
+  const from = new Date(now - 4 * 864e5).toISOString().slice(0, 10);
+  const till = new Date(now + 864e5).toISOString().slice(0, 10);
+  let all = [], start = 0;
+  for (let page = 0; page < 6; page++) {
+    const url = `${ISS}${SECID}/candles.json?interval=1&from=${from}&till=${till}&start=${start}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const j = await res.json();
+    if (!j.candles) throw new Error('нет блока candles');
+    const { columns, data } = j.candles;
+    data.forEach(r => { const o = {}; columns.forEach((c, i) => o[c] = r[i]); all.push(o); });
+    if (data.length < 500) break;
+    start += data.length;
+  }
+  if (!all.length) throw new Error('пустой ответ');
+  state.base = all;
+}
+
+/* ============ агрегация 1min -> ТФ ============ */
+function aggregate(rows, tf) {
+  const span = tf * 60, out = [];
+  let cur = null;
+  for (const r of rows) {
+    const t = Math.floor(parseTs(r.begin) / span) * span;
+    if (!cur || cur.time !== t) {
+      cur = { time: t, open: +r.open, high: +r.high, low: +r.low, close: +r.close, volume: +r.volume || 0 };
+      out.push(cur);
+    } else {
+      cur.high = Math.max(cur.high, +r.high);
+      cur.low  = Math.min(cur.low,  +r.low);
+      cur.close = +r.close;
+      cur.volume += (+r.volume || 0);
+    }
+  }
+  return out;
+}
+
+function applyTF(tf) {
+  state.tf = tf;
+  state.data = aggregate(state.base, tf);
+  candleSeries.setData(state.data);
+  volSeries.setData(state.data.map(c => ({ time: c.time, value: c.volume, color: VOL_COLOR })));
+  chart.timeScale().scrollToRealTime();
+  $('legend-tf').textContent = tf + ' мин';
+  setLegend(state.data[state.data.length - 1]);
+}
+
+/* ============ real-time (marketdata) ============ */
+async function poll() {
+  try {
+    const res = await fetch(`${ISS}${SECID}/marketdata.json`);
+    const j = await res.json();
+    const { columns, data } = j.marketdata;
+    if (data && data.length) {
+      const md = {}; columns.forEach((c, i) => md[c] = data[0][i]);
+      onQuote(md);
+      if (md.LAST != null) {
+        const ts = md.TIME ? parseTs(md.TIME) : Math.floor(Date.now() / 1000);
+        updateCandle(ts, +md.LAST, +md.LASTSIZE || 0);
+      }
+    }
+    $('upd').textContent = 'Обновлено: ' + new Date().toLocaleTimeString('ru-RU');
+    $('error').hidden = true;
+  } catch (e) {
+    $('upd').textContent = 'Ошибка обновления: ' + e.message;
+  }
+  setTimeout(poll, POLL_MS);
+}
+
+function updateCandle(ts, price, size) {
+  const span = state.tf * 60;
+  const bucket = Math.floor(ts / span) * span;
+  const last = state.data[state.data.length - 1];
+  if (!last) return;
+  if (bucket > last.time) {                      // новая свеча
+    const c = { time: bucket, open: last.close,
+      high: Math.max(last.close, price), low: Math.min(last.close, price),
+      close: price, volume: size };
+    state.data.push(c);
+    candleSeries.update(c);
+    volSeries.update({ time: bucket, value: c.volume, color: VOL_COLOR });
+  } else if (bucket === last.time) {             // текущая свеча
+    last.close = price;
+    last.high = Math.max(last.high, price);
+    last.low  = Math.min(last.low,  price);
+    last.volume += size;
+    candleSeries.update(last);
+    volSeries.update({ time: last.time, value: last.volume, color: VOL_COLOR });
+  }
+}
+
+function onQuote(md) {
+  const price = +md.LAST;
+  if (!price) return;
+  const base = +md.PREVPRICE || +md.OPEN || price;   // изменение к пред. закрытию
+  const ch = price - base, pct = base ? ch / base * 100 : 0;
+  const up = ch >= 0;
+
+  const lastEl = $('last');
+  lastEl.textContent = fmt(price);
+  lastEl.className = 'last ' + (up ? 'up' : 'down');
+
+  const chEl = $('change');
+  chEl.textContent = `${up ? '+' : ''}${fmt(ch)} (${up ? '+' : ''}${pct.toFixed(2).replace('.', ',')}%)`;
+  chEl.className = 'change ' + (up ? 'up' : 'down');
+
+  $('bid').textContent = fmt(+md.BID || price);
+  $('ask').textContent = fmt(+md.OFFER || price);
+  state.last = price;
+}
+
+/* ============ легенда OHLC ============ */
+function setLegend(c, time) {
+  const ohlc = $('legend-ohlc'), when = $('legend-time');
+  if (!c) { ohlc.innerHTML = ''; when.textContent = ''; return; }
+  const up = c.close >= c.open, cls = up ? 'up' : 'down';
+  const pct = (c.close - c.open) / c.open * 100;
+  ohlc.innerHTML =
+    `Откр <b class="${cls}">${fmt(c.open)}</b> · Макс <b class="${cls}">${fmt(c.high)}</b> · ` +
+    `Мин <b class="${cls}">${fmt(c.low)}</b> · Закр <b class="${cls}">${fmt(c.close)}</b> ` +
+    `<span class="${cls}">(${pct >= 0 ? '+' : ''}${pct.toFixed(2).replace('.', ',')}%)</span> · ` +
+    `Объём <b>${(c.volume || 0).toLocaleString('ru-RU')}</b>`;
+  when.textContent = fmtTime(time || c.time);
+}
+
+/* ============ переключение ТФ ============ */
+$('tf').addEventListener('click', e => {
+  const b = e.target.closest('button[data-tf]');
+  if (!b) return;
+  document.querySelectorAll('#tf button').forEach(x => x.classList.toggle('active', x === b));
+  applyTF(+b.dataset.tf);
+});
+
+/* ============ старт ============ */
+(async () => {
+  try {
+    await loadHistory();
+    applyTF(1);
+    poll();
+    setInterval(async () => {           // периодическая коррекция истории
+      try { await loadHistory(); applyTF(state.tf); } catch (e) {}
+    }, REFRESH_MS);
+  } catch (e) {
+    const err = $('error');
+    err.hidden = false;
+    err.textContent = 'Не удалось загрузить данные MOEX: ' + e.message + '. Проверьте соединение и обновите страницу.';
+  }
+})();
+})();
+</script>
+</body>
+</html>
