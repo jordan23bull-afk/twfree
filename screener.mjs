@@ -130,6 +130,16 @@ function select(rows, securities, opts = {}) {
   return { picked: out, stats };
 }
 
+/**
+ * Дата торгов "2026-09-28" -> метка UTC-полночи этой даты.
+ * Важно строить именно UTC: Date.parse с локальным временем сдвинул бы
+ * дату на сутки назад, и в графике не было бы свечи за нужный день.
+ */
+function tradeDateToUtc(dateStr) {
+  const [y, m, d] = String(dateStr).split('-').map(Number);
+  return Date.UTC(y, m - 1, d) / 1000;
+}
+
 /** Дневная история по одному тикеру. */
 async function fetchCandles(secid, from, till) {
   const cols = 'TRADEDATE,OPEN,LOW,HIGH,CLOSE,VOLUME';
@@ -142,7 +152,7 @@ async function fetchCandles(secid, from, till) {
   j.history.columns.forEach((c, i) => (idx[c] = i));
   return j.history.data
     .map(r => ({
-      time: Date.parse(String(r[idx.TRADEDATE]).replace(/-/g, '/')) / 1000,
+      time: tradeDateToUtc(r[idx.TRADEDATE]),
       open: Number(r[idx.OPEN]),
       high: Number(r[idx.HIGH]),
       low: Number(r[idx.LOW]),
@@ -155,9 +165,7 @@ async function fetchCandles(secid, from, till) {
 
 /** Дата на days календарных дней раньше (историю берём с запасом). */
 function shiftDate(dateStr, days) {
-  const d = new Date(dateStr.replace(/-/g, '/'));
-  d.setDate(d.getDate() - days);
-  return iso(d);
+  return iso(new Date(tradeDateToUtc(dateStr) * 1000 - days * 864e5));
 }
 
 /** Отбор + история для графика. */
