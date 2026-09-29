@@ -113,7 +113,7 @@
 
 <footer>
   <span id="upd">Загрузка data.json…</span>
-  <span>Данные: MOEX ISS · Скрининг TQBR</span>
+  <span>Данные: data.json · Скрининг TQBR</span>
 </footer>
 
 <script>
@@ -122,12 +122,9 @@
 
 const DATA_URL = 'https://raw.githubusercontent.com/jordan23bull-afk/twfree/main/data.json';
 const ISS_CANDLES = 'https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities/';
-const ISS_HIST = 'https://iss.moex.com/iss/history/engines/stock/markets/shares/boards/TQBR/securities.json';
-const ISS_SEC = 'https://iss.moex.com/iss/history/engines/stock/markets/shares/boards/TQBR/securities';
-const ISS_BOARD = 'https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities.json';
 const VOL_COLOR = 'rgba(125,135,148,0.45)';
 
-const state = { secid: null, tf: 1440, data: [], wl: [], date: null, source: null, cache: {} };
+const state = { secid: null, tf: 1440, data: [], wl: [], date: null, cache: {} };
 
 const $ = id => document.getElementById(id);
 const fmt = v => (v == null || isNaN(v)) ? '—' :
@@ -142,105 +139,24 @@ function fail(msg) {
   err.textContent = msg;
 }
 
-/* ============ вшитый отбор: запасной путь, если data.json недоступен ============ */
-const SCREENER = { minValue: 10000000, minAtr: 150, historyDays: 30, maxLookback: 10 };
-const iso = d => d.toISOString().slice(0, 10);
-async function getJson(url) {
-  const r = await fetch(url);
-  if (!r.ok) throw new Error('HTTP ' + r.status);
-  return r.json();
-}
-async function findLastTradingDate() {
-  const probe = iso(new Date(Date.now() - 3 * 6.4e5));
-  const { dates } = await getJson(`https://iss.moex.com/iss/history/engines/stock/markets/shares/boards/TQBR/dates.json?from=${probe}&iss.meta=off`);
-  if (dates && dates.data && dates.data[0] && dates.data[0][1]) return dates.data[0][1];
-  for (let i = 0; i < SCREENER.maxLookback; i++) {
-    const d = new Date(); d.setUTCDate(d.getUTCDate() - i);
-    const j = await getJson(`${ISS_HIST}?date=${iso(d)}&iss.meta=off&start=0&history.columns=SECID`);
-    if (j.history && j.history.data && j.history.data.length) return iso(d);
-  }
-  throw new Error('Торговая сессия не найдена');
-}
-async function fetchDayRows(date) {
-  const cols = 'SECID,SHORTNAME,OPEN,LOW,HIGH,CLOSE,VOLUME,VALUE';
-  const out = [];
-  for (let start = 0; start < 5000; start += 100) {
-    const j = await getJson(`${ISS_HIST}?date=${date}&iss.meta=off&start=${start}&history.columns=${cols}`);
-    if (!j.history || !j.history.data) break;
-    for (const row of j.history.data) { const o = {}; j.history.columns.forEach((c,i)=>o[c]=row[i]); out.push(o); }
-    if (j.history.data.length < 100) break;
-  }
-  if (!out.length) throw new Error('Пустая история за ' + date);
-  return out;
-}
-async function fetchSteps() {
-  const j = await getJson(`${ISS_BOARD}?iss.meta=off&iss.only=securities&securities.columns=SECID,MINSTEP`);
-  const s = {}; for (const r of j.securities.data) s[r[0]] = Number(r[1]); return s;
-}
-function select(rows, steps) {
-  const out = [];
-  for (const r of rows) {
-    if (!(Number(r.VALUE) >= SCREENER.minValue) || !(Number(r.VOLUME) > 0)) continue;
-    const step = steps[r.SECID];
-    if (!step) continue;
-    const h = Number(r.HIGH), l = Number(r.LOW);
-    if (!(h > 0) || !(l > 0)) continue;
-    const atr = (h - l) / step;
-    if (atr < SCREENER.minAtr) continue;
-    const c = Number(r.CLOSE), o = Number(r.OPEN);
-    out.push({ secid: r.SECID, name: r.SHORTNAME || '', atr: Math.round(atr*10)/10, step,
-      flag: c > o ? 'green' : 'red',
-      change: o ? Math.round((c-o)/o*10000)/100 : 0, close: c, value: Number(r.VALUE) });
-  }
-  out.sort((a,b) => b.atr - a.atr);
-  return out;
-}
-async function fetchCandles(secid, from, till) {
-  const cols = 'TRADEDATE,OPEN,LOW,HIGH,CLOSE,VOLUME';
-    const j = await getJson(`${ISS_SEC}/${secid}.json?from=${from}&till=${till}&iss.meta=off&iss.only=history&history.columns=${cols}`);
-  if (!j.history || !j.history.data) return [];
-  const i = {}; j.history.columns.forEach((c,k)=>i[c]=k);
-  return j.history.data.map(r => ({
-    time: Date.parse(String(r[i.TRADEDATE]).replace(/-/g,'/'))/1000,
-    open: Number(r[i.OPEN]), high: Number(r[i.HIGH]), low: Number(r[i.LOW]),
-    close: Number(r[i.CLOSE]), volume: Number(r[i.VOLUME])||0
-  })).filter(c => Number.isFinite(c.time) && c.open > 0).sort((a,b)=>a.time-b.time);
-}
-async function runScreener(onStep) {
-  onStep('Поиск последней торговой сессии…');
-  const date = await findLastTradingDate();
-  onStep(`Загрузка акций за ${date}…`);
-  const rows = await fetchDayRows(date);
-  const steps = await fetchSteps();
-  const picked = select(rows, steps);
-  onStep(`Отбор: ${picked.length} акций, загрузка истории…`);
-  const from = iso(new Date(new Date(date.replace(/-/g,'/')).getTime() - Math.ceil(SCREENER.historyDays*1.6)*864e5));
-  const candles = {};
-  for (const p of picked) {
-    try { candles[p.secid] = await fetchCandles(p.secid, from, date); } catch { candles[p.secid] = []; }
-  }
-  return { tradedate: date, generated: new Date().toISOString(), counts: { total: rows.length, picked: picked.length },
-    watchlist: picked, candles };
-}
-
-/* ============ загрузка данных: сначала data.json, иначе считаем сами ============ */
+/* ============ данные: только data.json с GitHub ============
+   Отбор живёт в screener.mjs на стороне Node. Если файла нет или он
+   устарел, запустите у себя: node screener.mjs, затем закоммитьте data.json */
 async function loadData() {
+  $('upd').textContent = 'Загрузка data.json с GitHub…';
+  let r;
   try {
-    $('upd').textContent = 'Загрузка data.json с GitHub…';
-    const r = await fetch(DATA_URL + '?t=' + Date.now());
-    if (r.ok) {
-      const j = await r.json();
-      if (j && Array.isArray(j.watchlist) && j.watchlist.length) {
-        state.source = 'data.json';
-        return j;
-      }
-    }
-    throw new Error('data.json недоступен или пуст');
-  } catch (e) {
-    $('upd').textContent = 'data.json недоступен, отбор на бирже…';
-    state.source = 'live';
-    return await runScreener(s => { $('upd').textContent = s; });
+    r = await fetch(DATA_URL + '?t=' + Date.now());
+  } catch {
+    throw new Error('нет связи с GitHub');
   }
+  if (!r.ok) throw new Error('GitHub вернул HTTP ' + r.status);
+  const j = await r.json();
+  if (!j || !Array.isArray(j.watchlist) || !j.watchlist.length) {
+    throw new Error('в data.json пустой список');
+  }
+  if (!j.candles) throw new Error('в data.json нет истории свечей');
+  return j;
 }
 
 /* ============ вочлист ============ */
@@ -451,8 +367,7 @@ $('tf').addEventListener('click', async e => {
 });
 
 function footerText() {
-  const src = state.source === 'data.json' ? 'data.json' : 'расчёт на бирже';
-  return `Сессия ${state.date || '—'} · ${state.wl.length} акций · ${src}`;
+  return `Сессия ${state.date || '—'} · ${state.wl.length} акций`;
 }
 
 /* ============ старт ============ */
@@ -473,8 +388,9 @@ function footerText() {
     }
     $('upd').textContent = footerText();
   } catch (e) {
-    fail('Не удалось загрузить данные.\n' + e.message + '\nПроверьте соединение и обновите страницу.');
-    $('upd').textContent = 'Ошибка загрузки.';
+    fail('Не удалось загрузить data.json.\n\n' + e.message +
+      '\n\nОбновить данные: node screener.mjs, затем закоммитьте data.json в репозиторий.');
+    $('upd').textContent = 'Нет данных.';
   }
 })();
 })();
