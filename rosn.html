@@ -242,12 +242,16 @@ wlDropdown.querySelectorAll('.wl-filter-item').forEach(item => {
 });
 
 /* ============ график ============ */
+// Сколько свечей оставляем пустыми справа от последней, чтобы она
+// всегда была в видимой области и не липла к краю.
+const RIGHT_OFFSET = 20;
+
 const chart = LightweightCharts.createChart($('chart'), {
   autoSize: true,
   layout: { background: { type: 'solid', color: '#0b0d10' }, textColor: '#8b919c', fontSize: 11 },
   grid: { vertLines: { color: '#151a20' }, horzLines: { color: '#151a20' } },
   rightPriceScale: { borderColor: '#1c232b', scaleMargins: { top: .08, bottom: .24 } },
-  timeScale: { borderColor: '#1c232b', timeVisible: true, secondsVisible: false, rightOffset: 6, barSpacing: 7 },
+  timeScale: { borderColor: '#1c232b', timeVisible: true, secondsVisible: false, rightOffset: RIGHT_OFFSET, barSpacing: 7 },
   crosshair: {
     mode: LightweightCharts.CrosshairMode.Normal,
     vert: { color: '#2b333d', labelBackgroundColor: '#2b333d' },
@@ -320,6 +324,13 @@ function aggregate(rows, tf) {
   return out;
 }
 
+/** После любой перерисовки: последняя свеча в кадре, справа пусто RIGHT_OFFSET свечей. */
+function showLastBar() {
+  const ts = chart.timeScale();
+  ts.applyOptions({ rightOffset: RIGHT_OFFSET });
+  ts.scrollToRealTime();
+}
+
 async function applyTF(tf) {
   state.tf = tf;
   $('error').hidden = true;
@@ -334,7 +345,7 @@ async function applyTF(tf) {
   state.data = rows;
   candleSeries.setData(rows);
   volSeries.setData(rows.map(c => ({ time: c.time, value: c.volume, color: VOL_COLOR })));
-  chart.timeScale().scrollToRealTime();
+  showLastBar();
   $('legend-tf').textContent = cfg.label;
   setLegend(rows[rows.length - 1]);
 }
