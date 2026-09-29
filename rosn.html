@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ROSN — ПАО НК «Роснефть» · MOEX · real-time</title>
-<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<title>Скрининг акций MOEX · TQBR</title>
+<script src="https://unpkg.com/lightweight-charts@5.2.1/dist/lightweight-charts.standalone.production.js"></script>
 <style>
   :root{
     --bg:#0b0d10; --panel:#10141a; --border:#1c232b; --text:#d1d4dc; --muted:#787b86;
-    --green:#089982; --red:#f23645; --blue:#2962ff; --yellow:#f7a600;
+    --green:#089982; --red:#f23645; --yellow:#f7a600;
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{height:100%}
@@ -17,96 +17,304 @@
   .logo{width:34px;height:34px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#ffd75e,var(--yellow) 60%,#b26a00);color:#1b1400;font-weight:700;display:flex;align-items:center;justify-content:center;font-size:13px;flex:0 0 auto}
   .tick-name{font-weight:700;font-size:14px}
   .tick-sub{font-size:11px;color:var(--muted)}
-  .quote{display:flex;align-items:baseline;gap:10px;margin-left:6px}
-  .last{font-size:20px;font-weight:700;letter-spacing:.3px}
-  .change{font-size:12px;font-weight:600;padding:3px 8px;border-radius:4px}
   .up{color:var(--green)} .down{color:var(--red)}
-  .change.up{background:rgba(8,153,130,.12)} .change.down{background:rgba(242,54,69,.12)}
-  .trade{display:flex;gap:8px}
-  .trade button{min-width:88px;padding:4px 10px;border-radius:6px;background:transparent;cursor:pointer;display:flex;flex-direction:column;align-items:center;line-height:1.15;font:inherit;font-size:13px;font-weight:700}
-  .trade small{font-size:9px;letter-spacing:.8px;font-weight:600}
-  .trade .sell{border:1px solid var(--red);color:var(--red)}
-  .trade .buy{border:1px solid var(--blue);color:#4f8cff}
-  .trade button:hover{filter:brightness(1.25)}
   .spacer{flex:1}
   .tf-group{display:flex;border:1px solid var(--border);border-radius:6px;overflow:hidden}
   .tf-group button{background:transparent;border:0;color:var(--muted);cursor:pointer;padding:6px 14px;font:inherit;font-size:12px;font-weight:700}
   .tf-group button + button{border-left:1px solid var(--border)}
   .tf-group button:hover{color:var(--text)}
   .tf-group button.active{background:#1f2733;color:#fff}
-  .live{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--green)}
-  .dot{width:8px;height:8px;border-radius:50%;background:var(--green);animation:pulse 1.6s infinite}
-  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(8,153,130,.5)}70%{box-shadow:0 0 0 8px rgba(8,153,130,0)}100%{box-shadow:0 0 0 0 rgba(8,153,130,0)}}
+  .tf-group button:disabled{opacity:.35;cursor:not-allowed}
   #wrap{position:relative;flex:1;min-height:0}
   #chart{position:absolute;inset:0}
   .legend{position:absolute;top:10px;left:12px;z-index:2;pointer-events:none;font-size:11px;color:var(--muted);text-shadow:0 1px 2px #000}
   .legend .title{font-size:12px;color:var(--text);font-weight:700;margin-bottom:4px}
   .legend b{font-weight:600}
+  .legend .meta{color:var(--muted);margin-bottom:2px}
   footer{display:flex;justify-content:space-between;gap:10px;padding:5px 14px;font-size:11px;color:var(--muted);background:var(--panel);border-top:1px solid var(--border)}
-  #error{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(11,13,16,.8);z-index:5;color:var(--red);font-size:14px;text-align:center;padding:20px}
+  .main-row{display:flex;flex:1;min-height:0}
+  .wl{width:240px;flex:0 0 auto;background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column;min-height:0}
+  .wl-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);position:relative}
+  .wl-title{font-size:12px;font-weight:700;color:var(--text);cursor:pointer;display:flex;align-items:center;gap:4px;white-space:nowrap}
+  .wl-title::after{content:"\25be";font-size:10px;color:var(--muted)}
+  .wl-count{font-size:10px;color:var(--muted)}
+  .wl-filter-dropdown{position:absolute;top:100%;left:0;right:0;background:#14181e;border:1px solid var(--border);border-radius:4px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,.3)}
+  .wl-filter-dropdown.hidden{display:none}
+  .wl-filter-item{display:flex;align-items:center;gap:8px;padding:8px 12px;font-size:12px;color:var(--text);cursor:pointer}
+  .wl-filter-item:hover{background:rgba(255,255,255,.06)}
+  .wl-filter-item.active{background:rgba(255,255,255,.08);color:#fff}
+  .wl-flag-dot{width:10px;height:10px;border-radius:3px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.15)}
+  .wl-groups{flex:1;overflow:auto;min-height:0}
+  .wl-group-label{font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);padding:6px 12px 2px;display:flex;justify-content:space-between}
+  .wl-item{display:flex;align-items:center;gap:8px;padding:6px 12px;cursor:pointer;font-size:12px;color:var(--text);white-space:nowrap}
+  .wl-item:hover{background:rgba(255,255,255,.05)}
+  .wl-item.selected{background:#1f2733;color:#fff}
+  .wl-flag{width:10px;height:10px;border-radius:2px;flex-shrink:0;border:1px solid rgba(255,255,255,.3);display:inline-block}
+  .wl-atr{margin-left:auto;font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .wl-item.selected .wl-atr{color:var(--text)}
+  #error{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(11,13,16,.9);z-index:5;color:var(--red);font-size:14px;text-align:center;padding:20px;white-space:pre-line}
   [hidden]{display:none !important}
 </style>
 </head>
 <body>
 
 <header>
-  <div class="logo">RN</div>
+  <div class="logo">MOEX</div>
   <div>
-    <div class="tick-name">ПАО НК «Роснефть»</div>
-    <div class="tick-sub">ROSN · MOEX (TQBR) · real-time</div>
-  </div>
-  <div class="quote">
-    <div id="last" class="last">—</div>
-    <div id="change" class="change">—</div>
-  </div>
-  <div class="trade">
-    <button class="sell"><small>ПРОДАТЬ</small><span id="bid">—</span></button>
-    <button class="buy"><small>КУПИТЬ</small><span id="ask">—</span></button>
+    <div class="tick-name" id="tick-name">—</div>
+    <div class="tick-sub" id="tick-sub">Загрузка…</div>
   </div>
   <div class="spacer"></div>
   <div class="tf-group" id="tf">
-    <button data-tf="1" class="active">1 мин</button>
+    <button data-tf="1">1 мин</button>
     <button data-tf="5">5 мин</button>
+    <button data-tf="60">1 ч</button>
+    <button data-tf="1440" class="active">1 д</button>
+    <button data-tf="10080">1 нед</button>
   </div>
-  <div class="live"><span class="dot"></span>LIVE</div>
 </header>
 
+<div class="main-row">
 <div id="wrap">
   <div id="chart"></div>
   <div class="legend">
-    <div class="title">ПАО НК «Роснефть» · <span id="legend-tf">1 мин</span> · MOEX</div>
+    <div class="title"><span id="legend-name">—</span> · <span id="legend-tf">1 д</span> · MOEX</div>
+    <div class="meta" id="legend-flags"></div>
     <div id="legend-ohlc"></div>
     <div id="legend-time"></div>
   </div>
   <div id="error" hidden></div>
 </div>
 
+<aside class="wl">
+  <div class="wl-head">
+    <span class="wl-title" id="wl-filter-trigger">Список</span>
+    <span class="wl-count" id="wl-count"></span>
+    <div class="wl-filter-dropdown hidden" id="wl-filter-dropdown">
+      <div class="wl-filter-item active" data-filter="all"><span class="wl-flag-dot"></span><span>Все тикеры</span></div>
+      <div class="wl-filter-item" data-filter="green"><span class="wl-flag-dot" style="background:var(--green)"></span><span>Зелёный список</span></div>
+      <div class="wl-filter-item" data-filter="red"><span class="wl-flag-dot" style="background:var(--red)"></span><span>Красный список</span></div>
+    </div>
+  </div>
+  <div class="wl-groups" id="wl-groups"></div>
+</aside>
+</div>
+
 <footer>
-  <span id="upd">Загрузка данных MOEX…</span>
-  <span>Источник: MOEX ISS · Lightweight Charts (TradingView)</span>
+  <span id="upd">Загрузка data.json…</span>
+  <span>Данные: MOEX ISS · Скрининг TQBR</span>
 </footer>
 
 <script>
 (() => {
 'use strict';
 
-const SECID = 'ROSN';
-const ISS = 'https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities/';
-const POLL_MS = 4000;        // опрос котировок (real-time)
-const REFRESH_MS = 180000;   // полная перезагрузка истории
+const DATA_URL = 'https://raw.githubusercontent.com/jordan23bull-afk/twfree/main/data.json';
+const ISS_CANDLES = 'https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities/';
+const ISS_HIST = 'https://iss.moex.com/iss/history/engines/stock/markets/shares/boards/TQBR/securities.json';
+const ISS_SEC = 'https://iss.moex.com/iss/history/engines/stock/markets/shares/boards/TQBR/securities';
+const ISS_BOARD = 'https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities.json';
 const VOL_COLOR = 'rgba(125,135,148,0.45)';
 
-const state = { tf: 1, base: [], data: [], last: null };
+const state = { secid: null, tf: 1440, data: [], wl: [], date: null, source: null, cache: {} };
 
 const $ = id => document.getElementById(id);
 const fmt = v => (v == null || isNaN(v)) ? '—' :
   v.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-// Время биржи (МСК) показываем «как есть»: строку MOEX парсим как UTC
 const parseTs = s => Math.floor(Date.parse(String(s).replace(' ', 'T') + 'Z') / 1000);
 const fmtTime = t => { const s = new Date(t * 1000).toISOString();
   return s.slice(8,10)+'.'+s.slice(5,7)+'.'+s.slice(0,4)+' '+s.slice(11,16); };
 
-/* ================= график ================= */
+function fail(msg) {
+  const err = $('error');
+  err.hidden = false;
+  err.textContent = msg;
+}
+
+/* ============ вшитый отбор: запасной путь, если data.json недоступен ============ */
+const SCREENER = { minValue: 10000000, minAtr: 150, historyDays: 30, maxLookback: 10 };
+const iso = d => d.toISOString().slice(0, 10);
+async function getJson(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+async function findLastTradingDate() {
+  const probe = iso(new Date(Date.now() - 3 * 6.4e5));
+  const { dates } = await getJson(`https://iss.moex.com/iss/history/engines/stock/markets/shares/boards/TQBR/dates.json?from=${probe}&iss.meta=off`);
+  if (dates && dates.data && dates.data[0] && dates.data[0][1]) return dates.data[0][1];
+  for (let i = 0; i < SCREENER.maxLookback; i++) {
+    const d = new Date(); d.setUTCDate(d.getUTCDate() - i);
+    const j = await getJson(`${ISS_HIST}?date=${iso(d)}&iss.meta=off&start=0&history.columns=SECID`);
+    if (j.history && j.history.data && j.history.data.length) return iso(d);
+  }
+  throw new Error('Торговая сессия не найдена');
+}
+async function fetchDayRows(date) {
+  const cols = 'SECID,SHORTNAME,OPEN,LOW,HIGH,CLOSE,VOLUME,VALUE';
+  const out = [];
+  for (let start = 0; start < 5000; start += 100) {
+    const j = await getJson(`${ISS_HIST}?date=${date}&iss.meta=off&start=${start}&history.columns=${cols}`);
+    if (!j.history || !j.history.data) break;
+    for (const row of j.history.data) { const o = {}; j.history.columns.forEach((c,i)=>o[c]=row[i]); out.push(o); }
+    if (j.history.data.length < 100) break;
+  }
+  if (!out.length) throw new Error('Пустая история за ' + date);
+  return out;
+}
+async function fetchSteps() {
+  const j = await getJson(`${ISS_BOARD}?iss.meta=off&iss.only=securities&securities.columns=SECID,MINSTEP`);
+  const s = {}; for (const r of j.securities.data) s[r[0]] = Number(r[1]); return s;
+}
+function select(rows, steps) {
+  const out = [];
+  for (const r of rows) {
+    if (!(Number(r.VALUE) >= SCREENER.minValue) || !(Number(r.VOLUME) > 0)) continue;
+    const step = steps[r.SECID];
+    if (!step) continue;
+    const h = Number(r.HIGH), l = Number(r.LOW);
+    if (!(h > 0) || !(l > 0)) continue;
+    const atr = (h - l) / step;
+    if (atr < SCREENER.minAtr) continue;
+    const c = Number(r.CLOSE), o = Number(r.OPEN);
+    out.push({ secid: r.SECID, name: r.SHORTNAME || '', atr: Math.round(atr*10)/10, step,
+      flag: c > o ? 'green' : 'red',
+      change: o ? Math.round((c-o)/o*10000)/100 : 0, close: c, value: Number(r.VALUE) });
+  }
+  out.sort((a,b) => b.atr - a.atr);
+  return out;
+}
+async function fetchCandles(secid, from, till) {
+  const cols = 'TRADEDATE,OPEN,LOW,HIGH,CLOSE,VOLUME';
+    const j = await getJson(`${ISS_SEC}/${secid}.json?from=${from}&till=${till}&iss.meta=off&iss.only=history&history.columns=${cols}`);
+  if (!j.history || !j.history.data) return [];
+  const i = {}; j.history.columns.forEach((c,k)=>i[c]=k);
+  return j.history.data.map(r => ({
+    time: Date.parse(String(r[i.TRADEDATE]).replace(/-/g,'/'))/1000,
+    open: Number(r[i.OPEN]), high: Number(r[i.HIGH]), low: Number(r[i.LOW]),
+    close: Number(r[i.CLOSE]), volume: Number(r[i.VOLUME])||0
+  })).filter(c => Number.isFinite(c.time) && c.open > 0).sort((a,b)=>a.time-b.time);
+}
+async function runScreener(onStep) {
+  onStep('Поиск последней торговой сессии…');
+  const date = await findLastTradingDate();
+  onStep(`Загрузка акций за ${date}…`);
+  const rows = await fetchDayRows(date);
+  const steps = await fetchSteps();
+  const picked = select(rows, steps);
+  onStep(`Отбор: ${picked.length} акций, загрузка истории…`);
+  const from = iso(new Date(new Date(date.replace(/-/g,'/')).getTime() - Math.ceil(SCREENER.historyDays*1.6)*864e5));
+  const candles = {};
+  for (const p of picked) {
+    try { candles[p.secid] = await fetchCandles(p.secid, from, date); } catch { candles[p.secid] = []; }
+  }
+  return { tradedate: date, generated: new Date().toISOString(), counts: { total: rows.length, picked: picked.length },
+    watchlist: picked, candles };
+}
+
+/* ============ загрузка данных: сначала data.json, иначе считаем сами ============ */
+async function loadData() {
+  try {
+    $('upd').textContent = 'Загрузка data.json с GitHub…';
+    const r = await fetch(DATA_URL + '?t=' + Date.now());
+    if (r.ok) {
+      const j = await r.json();
+      if (j && Array.isArray(j.watchlist) && j.watchlist.length) {
+        state.source = 'data.json';
+        return j;
+      }
+    }
+    throw new Error('data.json недоступен или пуст');
+  } catch (e) {
+    $('upd').textContent = 'data.json недоступен, отбор на бирже…';
+    state.source = 'live';
+    return await runScreener(s => { $('upd').textContent = s; });
+  }
+}
+
+/* ============ вочлист ============ */
+const FLAG_LABELS = { green: 'Зелёные', red: 'Красные' };
+let currentFilter = 'all';
+
+function renderList() {
+  const el = $('wl-groups');
+  el.innerHTML = '';
+  const groups = { green: [], red: [] };
+  for (const t of state.wl) {
+    if (currentFilter !== 'all' && t.flag !== currentFilter) continue;
+    (groups[t.flag] || (groups[t.flag] = [])).push(t);
+  }
+  for (const c of ['green', 'red']) {
+    const items = groups[c];
+    if (!items || !items.length) continue;
+    const lbl = document.createElement('div');
+    lbl.className = 'wl-group-label';
+    lbl.innerHTML = `<span>${FLAG_LABELS[c]}</span><span>${items.length}</span>`;
+    el.appendChild(lbl);
+    for (const t of items) {
+      const row = document.createElement('div');
+      row.className = 'wl-item' + (t.secid === state.secid ? ' selected' : '');
+      const dot = document.createElement('span');
+      dot.className = 'wl-flag';
+      dot.style.background = `var(--${c})`;
+      const nm = document.createElement('span');
+      nm.textContent = t.secid;
+      nm.title = t.name || t.secid;
+      const atr = document.createElement('span');
+      atr.className = 'wl-atr';
+      atr.textContent = t.atr != null ? t.atr.toFixed(0) : '';
+      atr.title = 'ATR, пунктов';
+      row.append(dot, nm, atr);
+      row.addEventListener('click', () => openTicker(t.secid));
+      el.appendChild(row);
+    }
+  }
+  const total = state.wl.length;
+  $('wl-count').textContent = total ? `${total}` : '';
+  if (total && !el.children.length) {
+    const d = document.createElement('div');
+    d.className = 'wl-group-label';
+    d.textContent = 'пусто в этом фильтре';
+    el.appendChild(d);
+  }
+}
+
+function openTicker(ticker, force) {
+  if (!ticker) return;
+  if (ticker === state.secid && !force) return;
+  state.secid = ticker;
+  const meta = state.wl.find(t => t.secid === ticker) || {};
+  $('tick-name').textContent = ticker;
+  $('tick-sub').textContent = `${ticker} · MOEX (TQBR)` + (meta.name ? ` · ${meta.name}` : '');
+  $('legend-name').textContent = ticker;
+  $('legend-flags').innerHTML = meta.flag
+    ? `<span class="up">ATR ${meta.atr} п.</span> · <span class="${meta.change >= 0 ? 'up' : 'down'}">${meta.change >= 0 ? '+' : ''}${String(meta.change).replace('.', ',')}%</span> · <span style="color:var(--${meta.flag})">${meta.flag === 'green' ? 'рост' : 'падение'}</span>`
+    : '';
+  document.title = `${ticker} — MOEX`;
+  renderList();
+  applyTF(state.tf).catch(() => {
+    fail('Не удалось загрузить свечи: ' + ticker);
+  });
+}
+
+/* ============ фильтр списка ============ */
+const wlTrigger = $('wl-filter-trigger');
+const wlDropdown = $('wl-filter-dropdown');
+wlTrigger.addEventListener('click', e => { e.stopPropagation(); wlDropdown.classList.toggle('hidden'); });
+document.addEventListener('click', e => {
+  if (!wlTrigger.contains(e.target) && !wlDropdown.contains(e.target)) wlDropdown.classList.add('hidden');
+});
+wlDropdown.querySelectorAll('.wl-filter-item').forEach(item => {
+  item.addEventListener('click', () => {
+    wlDropdown.querySelectorAll('.wl-filter-item').forEach(i => i.classList.remove('active'));
+    item.classList.add('active');
+    currentFilter = item.dataset.filter;
+    renderList();
+    wlDropdown.classList.add('hidden');
+  });
+});
+
+/* ============ график ============ */
 const chart = LightweightCharts.createChart($('chart'), {
   autoSize: true,
   layout: { background: { type: 'solid', color: '#0b0d10' }, textColor: '#8b919c', fontSize: 11 },
@@ -121,13 +329,12 @@ const chart = LightweightCharts.createChart($('chart'), {
   localization: { locale: 'ru-RU', priceFormatter: v => fmt(v) }
 });
 
-const candleSeries = chart.addCandlestickSeries({
+const candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
   upColor: '#089982', downColor: '#f23645',
   wickUpColor: '#089982', wickDownColor: '#f23645',
   borderVisible: false, priceLineColor: '#404a58'
 });
-
-const volSeries = chart.addHistogramSeries({
+const volSeries = chart.addSeries(LightweightCharts.HistogramSeries, {
   priceScaleId: 'vol', priceFormat: { type: 'volume' },
   lastValueVisible: false, priceVisible: false
 });
@@ -138,14 +345,23 @@ chart.subscribeCrosshairMove(p => {
   setLegend(c && c.open != null ? c : state.data[state.data.length - 1], p && p.time);
 });
 
-/* ============ история: MOEX ISS (1-мин свечи) ============ */
-async function loadHistory() {
+/* ============ таймфреймы ============ */
+const TFS = {
+  1:     { label: '1 мин',  interval: 1,  days: 4,   pages: 6, fromData: false },
+  5:     { label: '5 мин',  interval: 1,  days: 4,   pages: 6, fromData: false },
+  60:    { label: '1 ч',    interval: 60, days: 30,  pages: 4, fromData: false },
+  1440:  { label: '1 д',    interval: 24, days: 800, pages: 4, fromData: true },
+  10080: { label: '1 нед',  interval: 7,  days: 4000, pages: 4, fromData: false }
+};
+
+async function loadFromMoex(tf) {
+  const cfg = TFS[tf];
   const now = Date.now();
-  const from = new Date(now - 4 * 864e5).toISOString().slice(0, 10);
+  const from = new Date(now - cfg.days * 864e5).toISOString().slice(0, 10);
   const till = new Date(now + 864e5).toISOString().slice(0, 10);
   let all = [], start = 0;
-  for (let page = 0; page < 6; page++) {
-    const url = `${ISS}${SECID}/candles.json?interval=1&from=${from}&till=${till}&start=${start}`;
+  for (let page = 0; page < cfg.pages; page++) {
+    const url = `${ISS_CANDLES}${state.secid}/candles.json?interval=${cfg.interval}&from=${from}&till=${till}&start=${start}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const j = await res.json();
@@ -156,10 +372,9 @@ async function loadHistory() {
     start += data.length;
   }
   if (!all.length) throw new Error('пустой ответ');
-  state.base = all;
+  return aggregate(all, tf);
 }
 
-/* ============ агрегация 1min -> ТФ ============ */
 function aggregate(rows, tf) {
   const span = tf * 60, out = [];
   let cur = null;
@@ -178,81 +393,25 @@ function aggregate(rows, tf) {
   return out;
 }
 
-function applyTF(tf) {
+async function applyTF(tf) {
   state.tf = tf;
-  state.data = aggregate(state.base, tf);
-  candleSeries.setData(state.data);
-  volSeries.setData(state.data.map(c => ({ time: c.time, value: c.volume, color: VOL_COLOR })));
+  $('error').hidden = true;
+  const cfg = TFS[tf];
+  let rows;
+  if (cfg.fromData) {
+    rows = (state.cache && state.cache[state.secid]) || [];
+    if (!rows.length) throw new Error('нет дневных данных в data.json');
+  } else {
+    rows = await loadFromMoex(tf);
+  }
+  state.data = rows;
+  candleSeries.setData(rows);
+  volSeries.setData(rows.map(c => ({ time: c.time, value: c.volume, color: VOL_COLOR })));
   chart.timeScale().scrollToRealTime();
-  $('legend-tf').textContent = tf + ' мин';
-  setLegend(state.data[state.data.length - 1]);
+  $('legend-tf').textContent = cfg.label;
+  setLegend(rows[rows.length - 1]);
 }
 
-/* ============ real-time (marketdata) ============ */
-async function poll() {
-  try {
-    const res = await fetch(`${ISS}${SECID}/marketdata.json`);
-    const j = await res.json();
-    const { columns, data } = j.marketdata;
-    if (data && data.length) {
-      const md = {}; columns.forEach((c, i) => md[c] = data[0][i]);
-      onQuote(md);
-      if (md.LAST != null) {
-        const ts = md.TIME ? parseTs(md.TIME) : Math.floor(Date.now() / 1000);
-        updateCandle(ts, +md.LAST, +md.LASTSIZE || 0);
-      }
-    }
-    $('upd').textContent = 'Обновлено: ' + new Date().toLocaleTimeString('ru-RU');
-    $('error').hidden = true;
-  } catch (e) {
-    $('upd').textContent = 'Ошибка обновления: ' + e.message;
-  }
-  setTimeout(poll, POLL_MS);
-}
-
-function updateCandle(ts, price, size) {
-  const span = state.tf * 60;
-  const bucket = Math.floor(ts / span) * span;
-  const last = state.data[state.data.length - 1];
-  if (!last) return;
-  if (bucket > last.time) {                      // новая свеча
-    const c = { time: bucket, open: price,
-      high: price, low: price,
-      close: price, volume: size };
-    state.data.push(c);
-    candleSeries.update(c);
-    volSeries.update({ time: bucket, value: c.volume, color: VOL_COLOR });
-  } else if (bucket === last.time) {             // текущая свеча
-    last.close = price;
-    last.high = Math.max(last.high, price);
-    last.low  = Math.min(last.low,  price);
-    last.volume += size;
-    candleSeries.update(last);
-    volSeries.update({ time: last.time, value: last.volume, color: VOL_COLOR });
-  }
-}
-
-function onQuote(md) {
-  const price = +md.LAST;
-  if (!price) return;
-  const base = +md.PREVPRICE || +md.OPEN || price;   // изменение к пред. закрытию
-  const ch = price - base, pct = base ? ch / base * 100 : 0;
-  const up = ch >= 0;
-
-  const lastEl = $('last');
-  lastEl.textContent = fmt(price);
-  lastEl.className = 'last ' + (up ? 'up' : 'down');
-
-  const chEl = $('change');
-  chEl.textContent = `${up ? '+' : ''}${fmt(ch)} (${up ? '+' : ''}${pct.toFixed(2).replace('.', ',')}%)`;
-  chEl.className = 'change ' + (up ? 'up' : 'down');
-
-  $('bid').textContent = fmt(+md.BID || price);
-  $('ask').textContent = fmt(+md.OFFER || price);
-  state.last = price;
-}
-
-/* ============ легенда OHLC ============ */
 function setLegend(c, time) {
   const ohlc = $('legend-ohlc'), when = $('legend-time');
   if (!c) { ohlc.innerHTML = ''; when.textContent = ''; return; }
@@ -266,27 +425,45 @@ function setLegend(c, time) {
   when.textContent = fmtTime(time || c.time);
 }
 
-/* ============ переключение ТФ ============ */
-$('tf').addEventListener('click', e => {
+$('tf').addEventListener('click', async e => {
   const b = e.target.closest('button[data-tf]');
   if (!b) return;
   document.querySelectorAll('#tf button').forEach(x => x.classList.toggle('active', x === b));
-  applyTF(+b.dataset.tf);
+  $('upd').textContent = 'Загрузка ' + TFS[b.dataset.tf].label + '…';
+  try {
+    await applyTF(+b.dataset.tf);
+    $('upd').textContent = footerText();
+  } catch (e) {
+    fail('Не удалось загрузить ' + TFS[b.dataset.tf].label + ': ' + e.message);
+    $('upd').textContent = 'Ошибка загрузки.';
+  }
 });
+
+function footerText() {
+  const src = state.source === 'data.json' ? 'data.json' : 'расчёт на бирже';
+  return `Сессия ${state.date || '—'} · ${state.wl.length} акций · ${src}`;
+}
 
 /* ============ старт ============ */
 (async () => {
   try {
-    await loadHistory();
-    applyTF(1);
-    poll();
-    setInterval(async () => {           // периодическая коррекция истории
-      try { await loadHistory(); applyTF(state.tf); } catch (e) {}
-    }, REFRESH_MS);
+    const data = await loadData();
+    state.wl = data.watchlist;
+    state.date = data.tradedate;
+    state.cache = data.candles || {};
+    state.secid = state.wl[0] ? state.wl[0].secid : null;
+    if (state.secid) {
+      renderList();
+      openTicker(state.secid, true);
+    } else {
+      $('tick-name').textContent = 'Пусто';
+      $('tick-sub').textContent = 'ничего не прошло отбор';
+      renderList();
+    }
+    $('upd').textContent = footerText();
   } catch (e) {
-    const err = $('error');
-    err.hidden = false;
-    err.textContent = 'Не удалось загрузить данные MOEX: ' + e.message + '. Проверьте соединение и обновите страницу.';
+    fail('Не удалось загрузить данные.\n' + e.message + '\nПроверьте соединение и обновите страницу.');
+    $('upd').textContent = 'Ошибка загрузки.';
   }
 })();
 })();
