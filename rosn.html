@@ -19,7 +19,7 @@
 <style>
   :root{
     --bg:#0b0d10; --panel:#10141a; --border:#1c232b; --text:#d1d4dc; --muted:#787b86;
-    --green:#089982; --red:#f23645; --yellow:#f7a600;
+    --green:#089982; --red:#f23645; --yellow:#f7a600; --poc:#f0b90b;
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{height:100%}
@@ -214,9 +214,14 @@ function openTicker(ticker, force) {
   $('tick-name').textContent = ticker;
   $('tick-sub').textContent = `${ticker} · MOEX (TQBR)` + (meta.name ? ` · ${meta.name}` : '');
   $('legend-name').textContent = ticker;
-  $('legend-flags').innerHTML = meta.flag
+  const flags = meta.flag
     ? `<span class="up">ATR ${meta.atr} п.</span> · <span class="${meta.change >= 0 ? 'up' : 'down'}">${meta.change >= 0 ? '+' : ''}${String(meta.change).replace('.', ',')}%</span> · <span style="color:var(--${meta.flag})">${meta.flag === 'green' ? 'рост' : 'падение'}</span>`
     : '';
+  const poc = typeof meta.poc === 'number' && meta.poc > 0
+    ? ` · <span style="color:var(--poc)">POC ${fmt(meta.poc)}</span>` +
+      `<span class="${meta.pocGap >= 0 ? 'up' : 'down'}"> ${meta.pocGap >= 0 ? '+' : ''}${String(meta.pocGap).replace('.', ',')}%</span>`
+    : '';
+  $('legend-flags').innerHTML = flags + poc;
   document.title = `${ticker} — MOEX`;
   renderList();
   applyTF(state.tf).catch(() => {
@@ -269,6 +274,7 @@ const volSeries = chart.addSeries(LightweightCharts.HistogramSeries, {
   priceScaleId: 'vol', priceFormat: { type: 'volume' },
   lastValueVisible: false, priceVisible: false
 });
+let pocLine = null;
 chart.priceScale('vol').applyOptions({ scaleMargins: { top: .82, bottom: 0 } });
 
 chart.subscribeCrosshairMove(p => {
@@ -331,6 +337,25 @@ function showLastBar() {
   ts.scrollToRealTime();
 }
 
+/**
+ * POC последнего дня: горизонтальный уровень на графике.
+ * Отрезком в один бар не рисуем — он вырождался в несколько пикселей,
+ * а заголовок серии перекрывался визуально. Уровень читается на любой ТФ.
+ */
+function setPoc() {
+  if (pocLine) { candleSeries.removePriceLine(pocLine); pocLine = null; }
+  const meta = (state.wl || []).find(t => t.secid === state.secid);
+  if (typeof meta?.poc !== 'number' || !(meta.poc > 0)) return;
+  pocLine = candleSeries.createPriceLine({
+    price: meta.poc,
+    color: '#f0b90b',
+    lineWidth: 1,
+    lineStyle: 2, // LightweightCharts.LineStyle.Dashed = 2
+    axisLabelVisible: true,
+    title: 'POC дня'
+  });
+}
+
 async function applyTF(tf) {
   state.tf = tf;
   $('error').hidden = true;
@@ -345,6 +370,7 @@ async function applyTF(tf) {
   state.data = rows;
   candleSeries.setData(rows);
   volSeries.setData(rows.map(c => ({ time: c.time, value: c.volume, color: VOL_COLOR })));
+  setPoc();
   showLastBar();
   $('legend-tf').textContent = cfg.label;
   setLegend(rows[rows.length - 1]);

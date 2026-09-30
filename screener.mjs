@@ -16,7 +16,8 @@ const DEFAULTS = {
   minAtr: 150, // минимальный ATR в шагах цены
   historyDays: 30, // сколько дней истории класть в файл
   maxLookback: 10, // сколько дней назад искать последнюю торговую сессию
-  secTypes: '1,2' // какие типы бумаг допускать, см. SECTYPE ниже
+  secTypes: '1,2', // какие типы бумаг допускать, см. SECTYPE ниже
+  poc: true // считать ли POC последнего дня из минутных свечей
 };
 
 /**
@@ -168,6 +169,99 @@ function shiftDate(dateStr, days) {
   return iso(new Date(tradeDateToUtc(dateStr) * 1000 - days * 864e5));
 }
 
+/**
+ * Минутные свечи за один день. ISS отдаёт по 500 строк, поэтому листаем start.
+ * У блока candles нет колонки time — время бара лежит в begin.
+ */
+async function fetchDayMinutes(secid, date, maxPages = 12) {
+  const out = [];
+  let start = 0;
+  for (let page = 0; page < maxPages; page++) {
+    const j = await getJson(
+      `${ISS}/engines/${BOARD}/securities/${secid}/candles.json` +
+        `?interval=1&from=${date}&till=${date}&start=${start}&iss.meta=off`
+    );
+    const b = j.candles;
+    if (!b?.data?.length) break;
+    const idx = {};
+    b.columns.forEach((c, i) => (idx[c] = i));
+    for (const r of b.data) {
+      out.push({
+        high: Number(r[idx.high]),
+        low: Number(r[idx.low]),
+        volume: Number(r[idx.volume]) || 0
+      });
+    }
+    if (b.data.length < 500) break;
+    start += b.data.length;
+  }
+  return out;
+}
+
+/**
+ * POC дня: цена с наибольшим объёмом.
+ *
+ * Внутри минуты распределение объёма по ценам неизвестно, поэтому считаем
+ * равномерным по диапазону бара [low, high]. Чтобы не перебирать каждый шаг
+ * для каждой минуты, копим разности: минута вносит volume/число_шагов в
+ * каждый шаг своего диапазона, дальше один проход префиксной суммой.
+ * Шаг корзины — MINSTEP, то есть минимальное движение цены биржи.
+ */
+function computePoc(minutes, minstep) {
+  if (!minutes.length || !(minstep > 0)) return null;
+  let lo = Infinity;
+  let hi = -Infinity;
+  let total = 0;
+  for (const m of minutes) {
+    if (!(m.low > 0) || !(m.high > 0) || !(m.volume > 0)) continue;
+    if (m.low < lo) lo = m.low;
+    if (m.high > hi) hi = m.high;
+    total += m.volume;
+  }
+  if (!Number.isFinite(lo) || !(total > 0)) return null;
+
+  const from = Math.floor(lo / minstep);
+  const to = Math.ceil(hi / minstep);
+  const size = to - from + 1;
+  if (!(size > 0) || size > 5_000_000) return null;
+  const diff = new Float64Array(size + 1);
+
+  for (const m of minutes) {
+    if (!(m.low > 0) || !(m.high > 0) || !(m.volume > 0)) continue;
+    const a = Math.max(from, Math.floor(m.low / minstep));
+    const b = Math.min(to, Math.ceil(m.high / minstep));
+    if (b < a) continue;
+    const share = m.volume / (b - a + 1);
+    diff[a - from] += share;
+    diff[b - from + 1] -= share;
+  }
+
+  let acc = 0;
+  let bestVol = -1;
+  let bestIdx = -1;
+  for (let i = 0; i < size; i++) {
+    acc += diff[i];
+    if (acc > bestVol) { bestVol = acc; bestIdx = i; }
+  }
+  if (bestIdx < 0 || !(bestVol > 0)) return null;
+
+  return {
+    price: Math.round((from + bestIdx) * minstep * 1e6) / 1e6,
+    vol: bestVol,
+    // какая доля дневного объёма прошла по цене POC
+    share: Math.round((bestVol / total) * 10000) / 100
+  };
+}
+
+/** POC последнего дня для тикера; при неудаче — null, скрипт не падает. */
+async function fetchPoc(secid, date, minstep) {
+  try {
+    return computePoc(await fetchDayMinutes(secid, date), minstep);
+  } catch {
+    return null;
+  }
+}
+
 /** Отбор + история для графика. */
 async function run(opts = {}) {
   const o = { ...DEFAULTS, ...opts };
@@ -183,6 +277,13 @@ async function run(opts = {}) {
     } catch {
       candles[p.secid] = [];
     }
+    // POC дня: цена, где накопилось больше всего объёма
+    const poc = o.poc ? await fetchPoc(p.secid, date, p.step) : null;
+    if (poc) {
+      p.poc = poc.price;
+      p.pocShare = poc.share;
+      p.pocGap = p.close ? Math.round(((p.close - poc.price) / poc.price) * 10000) / 100 : 0;
+    }
   }
   return {
     tradedate: date,
@@ -191,9 +292,15 @@ async function run(opts = {}) {
       minValue: o.minValue,
       minAtr: o.minAtr,
       historyDays: o.historyDays,
-      secTypes: o.secTypes
+      secTypes: o.secTypes,
+      poc: o.poc
     },
-    counts: { total: rows.length, picked: picked.length, ...stats },
+    counts: {
+      total: rows.length,
+      picked: picked.length,
+      ...stats,
+      withPoc: picked.filter(p => typeof p.poc === 'number').length
+    },
     watchlist: picked,
     candles
   };
@@ -217,11 +324,19 @@ function argStr(name, fallback) {
   return v && !v.startsWith('--') ? v : fallback;
 }
 
+/** Логический аргумент: --no-poc выключает расчёт POC */
+function argBool(name, fallback) {
+  if (process.argv.includes(`--no-${name}`)) return false;
+  if (process.argv.includes(`--${name}`)) return true;
+  return fallback;
+}
+
 const opts = {
   minValue: arg('value', DEFAULTS.minValue),
   minAtr: arg('atr', DEFAULTS.minAtr),
   historyDays: arg('days', DEFAULTS.historyDays),
-  secTypes: argStr('types', DEFAULTS.secTypes)
+  secTypes: argStr('types', DEFAULTS.secTypes),
+  poc: argBool('poc', DEFAULTS.poc)
 };
 
 const log = (...a) => console.log(...a);
@@ -231,6 +346,7 @@ log(`  оборот от ${opts.minValue.toLocaleString('ru')} руб.`);
 log(`  ATR от ${opts.minAtr} пунктов`);
 log(`  история ${opts.historyDays} торговых дней`);
 log(`  типы бумаг: ${[...parseTypes(opts.secTypes)].join(', ')} (1 = ао, 2 = ап)`);
+log(`  POC последнего дня: ${opts.poc ? 'да' : 'нет'}`);
 log('');
 
 try {
@@ -243,10 +359,12 @@ try {
   log(`  отсеяно: не та бумага (ETF/ПИФ/облигация/расписка) — ${data.counts.type}, оборот — ${data.counts.turnover}, ATR — ${data.counts.atr}`);
   const green = data.watchlist.filter(w => w.flag === 'green').length;
   log(`  зелёных: ${green}, красных: ${data.counts.picked - green}`);
+  if (opts.poc) log(`  POC посчитан: ${data.counts.withPoc} из ${data.counts.picked}`);
   log(`data.json: ${(json.length / 1024).toFixed(1)} КБ`);
 
   for (const w of data.watchlist.slice(0, 10)) {
-    log(`  ${w.flag === 'green' ? '+' : '-'} ${w.secid.padEnd(8)} ATR ${String(w.atr).padStart(7)}  ${w.change > 0 ? '+' : ''}${w.change}%  ${w.name}`);
+    const poc = typeof w.poc === 'number' ? `  POC ${w.poc}` : '  POC —';
+    log(`  ${w.flag === 'green' ? '+' : '-'} ${w.secid.padEnd(8)} ATR ${String(w.atr).padStart(7)}  ${w.change > 0 ? '+' : ''}${w.change}%  ${w.name}${poc}`);
   }
   if (data.watchlist.length > 10) log(`  ...ещё ${data.watchlist.length - 10}`);
   log('');
