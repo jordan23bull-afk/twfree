@@ -44,8 +44,13 @@
   .legend .meta{color:var(--muted);margin-bottom:2px}
   footer{display:flex;justify-content:space-between;gap:10px;padding:5px 14px;font-size:11px;color:var(--muted);background:var(--panel);border-top:1px solid var(--border)}
   .main-row{display:flex;flex:1;min-height:0}
-  .wl{width:240px;flex:0 0 auto;background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column;min-height:0}
-  .wl-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);position:relative}
+  .wl{flex:0 0 var(--wl-w,clamp(132px,17vw,360px));min-width:0;position:relative;background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column;min-height:0}
+  .wl-resizer{position:absolute;left:-5px;top:0;bottom:0;width:11px;z-index:30;cursor:col-resize;touch-action:none;display:flex;align-items:center;justify-content:center}
+  .wl-resizer::before{content:"";position:absolute;left:5px;top:0;bottom:0;width:1px;background:transparent;transition:background .12s}
+  .wl-resizer:hover::before,.wl-resizer.active::before{background:var(--yellow)}
+  .wl-resizer::after{content:"\2194";position:relative;font-size:12px;line-height:1;padding:4px 1px;color:var(--muted);background:var(--panel);border:1px solid var(--border);border-radius:4px;opacity:0;transition:opacity .12s}
+  .wl-resizer:hover::after,.wl-resizer.active::after{opacity:1;color:var(--text)}
+  .wl-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:clamp(5px,.7vh,8px) clamp(8px,.8vw,12px);border-bottom:1px solid var(--border);position:relative}
   .wl-title{font-size:12px;font-weight:700;color:var(--text);cursor:pointer;display:flex;align-items:center;gap:4px;white-space:nowrap}
   .wl-title::after{content:"\25be";font-size:10px;color:var(--muted)}
   .wl-count{font-size:10px;color:var(--muted)}
@@ -56,13 +61,25 @@
   .wl-filter-item.active{background:rgba(255,255,255,.08);color:#fff}
   .wl-flag-dot{width:10px;height:10px;border-radius:3px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.15)}
   .wl-groups{flex:1;overflow:auto;min-height:0}
-  .wl-group-label{font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);padding:6px 12px 2px;display:flex;justify-content:space-between}
-  .wl-item{display:flex;align-items:center;gap:8px;padding:6px 12px;cursor:pointer;font-size:12px;color:var(--text);white-space:nowrap}
+  .wl-cols{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px clamp(8px,.8vw,12px);border-bottom:1px solid var(--border);font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
+  .wl-col-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .wl-col-atr{background:transparent;border:0;padding:0 0 0 6px;font:inherit;letter-spacing:inherit;color:inherit;cursor:pointer;display:flex;align-items:center;gap:3px;flex-shrink:0}
+  .wl-col-atr:hover{color:var(--text)}
+  .wl-col-atr.sorted{color:#fff}
+  .wl-sort-mark{font-size:9px;line-height:1}
+  .wl-empty{font-size:10px;letter-spacing:.6px;color:var(--muted);padding:6px clamp(8px,.8vw,12px) 2px}
+  .wl-item{display:flex;align-items:center;gap:clamp(4px,.5vw,8px);padding:clamp(4px,.6vh,6px) clamp(8px,.8vw,12px);cursor:pointer;font-size:clamp(11px,.75vw,13px);color:var(--text);white-space:nowrap}
   .wl-item:hover{background:rgba(255,255,255,.05)}
   .wl-item.selected{background:#1f2733;color:#fff}
   .wl-flag{width:10px;height:10px;border-radius:2px;flex-shrink:0;border:1px solid rgba(255,255,255,.3);display:inline-block}
-  .wl-atr{margin-left:auto;font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums}
-  .wl-item.selected .wl-atr{color:var(--text)}
+  .wl-name{overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .wl-atr{margin-left:auto;padding-left:6px;flex-shrink:0;font-size:clamp(10px,.7vw,12px);color:#fff;font-variant-numeric:tabular-nums}
+  .wl-item.selected .wl-atr{color:#fff}
+  @media (max-width:520px){
+    .wl{flex-basis:clamp(104px,26vw,150px)}
+    .wl-atr{display:none}
+    .wl-title{overflow:hidden;text-overflow:ellipsis}
+  }
   #error{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(11,13,16,.9);z-index:5;color:var(--red);font-size:14px;text-align:center;padding:20px;white-space:pre-line}
   [hidden]{display:none !important}
 </style>
@@ -97,7 +114,8 @@
   <div id="error" hidden></div>
 </div>
 
-<aside class="wl">
+<aside class="wl" id="wl">
+  <div class="wl-resizer" id="wl-resizer" title="Потяни границу — двойной клик вернёт резиновую ширину"></div>
   <div class="wl-head">
     <span class="wl-title" id="wl-filter-trigger">Список</span>
     <span class="wl-count" id="wl-count"></span>
@@ -106,6 +124,10 @@
       <div class="wl-filter-item" data-filter="green"><span class="wl-flag-dot" style="background:var(--green)"></span><span>Зелёный список</span></div>
       <div class="wl-filter-item" data-filter="red"><span class="wl-flag-dot" style="background:var(--red)"></span><span>Красный список</span></div>
     </div>
+  </div>
+  <div class="wl-cols">
+    <span class="wl-col-name">Тикер</span>
+    <button class="wl-col-atr" id="wl-sort-atr" type="button">ATR<span class="wl-sort-mark" id="wl-sort-mark"></span></button>
   </div>
   <div class="wl-groups" id="wl-groups"></div>
 </aside>
@@ -160,47 +182,47 @@ async function loadData() {
 }
 
 /* ============ вочлист ============ */
-const FLAG_LABELS = { green: 'Зелёные', red: 'Красные' };
 let currentFilter = 'all';
+let wlSort = null;
 
 function renderList() {
   const el = $('wl-groups');
   el.innerHTML = '';
-  const groups = { green: [], red: [] };
-  for (const t of state.wl) {
-    if (currentFilter !== 'all' && t.flag !== currentFilter) continue;
-    (groups[t.flag] || (groups[t.flag] = [])).push(t);
+  const frag = document.createDocumentFragment();
+  const items = state.wl.filter(t => currentFilter === 'all' || t.flag === currentFilter);
+  if (wlSort) {
+    items.sort((a, b) => {
+      const d = (a.atr || 0) - (b.atr || 0);
+      return wlSort === 'asc' ? d : -d;
+    });
   }
-  for (const c of ['green', 'red']) {
-    const items = groups[c];
-    if (!items || !items.length) continue;
-    const lbl = document.createElement('div');
-    lbl.className = 'wl-group-label';
-    lbl.innerHTML = `<span>${FLAG_LABELS[c]}</span><span>${items.length}</span>`;
-    el.appendChild(lbl);
-    for (const t of items) {
-      const row = document.createElement('div');
-      row.className = 'wl-item' + (t.secid === state.secid ? ' selected' : '');
-      const dot = document.createElement('span');
-      dot.className = 'wl-flag';
-      dot.style.background = `var(--${c})`;
-      const nm = document.createElement('span');
-      nm.textContent = t.secid;
-      nm.title = t.name || t.secid;
-      const atr = document.createElement('span');
-      atr.className = 'wl-atr';
-      atr.textContent = t.atr != null ? t.atr.toFixed(0) : '';
-      atr.title = 'ATR, пунктов';
-      row.append(dot, nm, atr);
-      row.addEventListener('click', () => openTicker(t.secid));
-      el.appendChild(row);
-    }
+  for (const t of items) {
+    const row = document.createElement('div');
+    row.className = 'wl-item' + (t.secid === state.secid ? ' selected' : '');
+    const dot = document.createElement('span');
+    dot.className = 'wl-flag';
+    dot.style.background = `var(--${t.flag === 'green' ? 'green' : 'red'})`;
+    const nm = document.createElement('span');
+    nm.className = 'wl-name';
+    nm.textContent = t.secid;
+    nm.title = t.name || t.secid;
+    const atr = document.createElement('span');
+    atr.className = 'wl-atr';
+    atr.textContent = t.atr != null ? t.atr.toFixed(0) : '';
+    atr.title = 'ATR, пунктов';
+    row.append(dot, nm, atr);
+    row.addEventListener('click', () => openTicker(t.secid));
+    frag.appendChild(row);
   }
+  el.appendChild(frag);
+  const sortBtn = $('wl-sort-atr');
+  sortBtn.classList.toggle('sorted', !!wlSort);
+  $('wl-sort-mark').textContent = wlSort === 'asc' ? '\u25b2' : wlSort === 'desc' ? '\u25bc' : '';
   const total = state.wl.length;
   $('wl-count').textContent = total ? `${total}` : '';
   if (total && !el.children.length) {
     const d = document.createElement('div');
-    d.className = 'wl-group-label';
+    d.className = 'wl-empty';
     d.textContent = 'пусто в этом фильтре';
     el.appendChild(d);
   }
@@ -244,6 +266,48 @@ wlDropdown.querySelectorAll('.wl-filter-item').forEach(item => {
     renderList();
     wlDropdown.classList.add('hidden');
   });
+});
+
+$('wl-sort-atr').addEventListener('click', () => {
+  wlSort = wlSort === 'asc' ? 'desc' : 'asc';
+  renderList();
+});
+
+/* ============ ширина вочлиста ============ */
+const WL_KEY = 'wl-width';
+const wlEl = $('wl');
+const wlResizer = $('wl-resizer');
+const wlLimits = () => [110, Math.max(220, Math.round(window.innerWidth * .6))];
+const wlClamp = w => Math.min(wlLimits()[1], Math.max(wlLimits()[0], Math.round(w)));
+
+const wlSaved = Number(localStorage.getItem(WL_KEY));
+if (wlSaved > 0) wlEl.style.setProperty('--wl-w', wlClamp(wlSaved) + 'px');
+
+let wlDrag = null;
+wlResizer.addEventListener('pointerdown', e => {
+  if (e.button) return;
+  wlDrag = { x: e.clientX, w: wlEl.getBoundingClientRect().width };
+  wlResizer.classList.add('active');
+  wlResizer.setPointerCapture(e.pointerId);
+  document.body.style.userSelect = 'none';
+  e.preventDefault();
+});
+wlResizer.addEventListener('pointermove', e => {
+  if (!wlDrag) return;
+  wlEl.style.setProperty('--wl-w', wlClamp(wlDrag.w - (e.clientX - wlDrag.x)) + 'px');
+});
+function wlDragEnd() {
+  if (!wlDrag) return;
+  wlDrag = null;
+  wlResizer.classList.remove('active');
+  document.body.style.userSelect = '';
+  localStorage.setItem(WL_KEY, String(wlClamp(wlEl.getBoundingClientRect().width)));
+}
+wlResizer.addEventListener('pointerup', wlDragEnd);
+wlResizer.addEventListener('pointercancel', wlDragEnd);
+wlResizer.addEventListener('dblclick', () => {
+  wlEl.style.removeProperty('--wl-w');
+  localStorage.removeItem(WL_KEY);
 });
 
 /* ============ график ============ */
