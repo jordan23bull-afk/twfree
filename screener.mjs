@@ -6,9 +6,26 @@
 import { writeFile } from 'node:fs/promises';
 
 const ISS = 'https://iss.moex.com/iss';
-const BOARD = 'stock/markets/shares/boards/TQBR';
+
+/**
+ * Площадки ISS. Путь движка/рынка/площадки разный, поэтому он хранится
+ * рядом с тикером: у каждого бумаги свой ISS_PATH, и rosn.html берёт
+ * тот же путь из data.json, чтобы дорисовать недостающие таймфреймы.
+ */
+const BOARDS = {
+  shares: 'stock/markets/shares/boards/TQBR',
+  forts: 'futures/markets/forts/boards/RFUD'
+};
+const BOARD = BOARDS.shares;
 const HISTORY_ALL = `${ISS}/history/engines/${BOARD}/securities.json`;
 const BOARD_SECURITIES = `${ISS}/engines/${BOARD}/securities.json`;
+
+/**
+ * Фьючерсы, которые добавляются в вочлист всегда, независимо от порогов
+ * отбора: оборот и ATR считаются для них так же, но отсев по обороту
+ * и минимальному ATR к ним не применяется.
+ */
+const EXTRA_FUTURES = ['IMOEXF', 'MXZ6'];
 
 // Пороги отбора
 const DEFAULTS = {
@@ -17,8 +34,16 @@ const DEFAULTS = {
   historyDays: 30, // сколько дней истории класть в файл
   maxLookback: 10, // сколько дней назад искать последнюю торговую сессию
   secTypes: '1,2', // какие типы бумаг допускать, см. SECTYPE ниже
-  poc: true // считать ли POC последнего дня из минутных свечей
+  poc: true, // считать ли POC последнего дня из минутных свечей
+  futures: true // добавлять ли фьючерсы из EXTRA_FUTURES
 };
+
+/**
+ * ISS отдаёт числа с запятой как десятичным разделителем: "2248,00000".
+ * Number() на такой строке даёт NaN, поэтому запятую приводим к точке.
+ * Точка и пустая строка уже обрабатываются Number как надо.
+ */
+const num = v => Number(String(v ?? '').replace(',', '.'));
 
 /**
  * Коды SECTYPE в ISS для рынка акций:
@@ -61,12 +86,15 @@ async function findLastTradingDate(maxLookback = DEFAULTS.maxLookback) {
   throw new Error('Не нашлась ни одна торговая сессия');
 }
 
-/** Все акции площадки за конкретный день. ISS отдаёт по 100 строк. */
-async function fetchDayRows(date) {
+/** Все бумаги площадки за конкретный день. ISS отдаёт по 100 строк. */
+async function fetchDayRows(date, board = BOARD) {
   const cols = 'SECID,SHORTNAME,OPEN,LOW,HIGH,CLOSE,VOLUME,VALUE';
   const out = [];
   for (let start = 0; start < 5000; start += 100) {
-    const j = await getJson(`${HISTORY_ALL}?date=${date}&iss.meta=off&start=${start}&history.columns=${cols}`);
+    const url =
+      `${ISS}/history/engines/${board}/securities.json` +
+      `?date=${date}&iss.meta=off&start=${start}&history.columns=${cols}`;
+    const j = await getJson(url);
     if (!j.history?.data) break;
     for (const row of j.history.data) {
       const o = {};
@@ -83,12 +111,15 @@ async function fetchDayRows(date) {
  * MINSTEP и SECTYPE для всех тикеров площадки: шаг цены и тип бумаги
  * нужны каждому тикеру свои, и одним запросом мы их получаем вместе.
  */
-async function fetchSecurities() {
+async function fetchSecurities(board = BOARD) {
   const j = await getJson(
-    `${BOARD_SECURITIES}?iss.meta=off&iss.only=securities&securities.columns=SECID,MINSTEP,SECTYPE`
+    `${ISS}/engines/${board}/securities.json` +
+      `?iss.meta=off&iss.only=securities&securities.columns=SECID,SHORTNAME,MINSTEP,SECTYPE`
   );
   const map = new Map();
-  for (const row of j.securities.data) map.set(row[0], { minstep: Number(row[1]), sectype: String(row[2] ?? '') });
+  for (const row of j.securities.data) {
+    map.set(row[0], { minstep: num(row[2]), sectype: String(row[3] ?? ''), name: String(row[1] ?? '') });
+  }
   return map;
 }
 
@@ -96,34 +127,44 @@ async function fetchSecurities() {
  * Отбор: тип бумаги -> оборот и объём -> ATR в шагах цены -> цвет флага.
  * ATR = (HIGH - LOW) / MINSTEP, то есть в пунктах, а не в рублях.
  * stats.type — сколько тикеров отсеяно по типу бумаги.
+ *
+ * board добавляется в карточку тикера: rosn.html по нему строит адрес ISS
+ * для остальных таймфреймов, поэтому фьючерс отличается от акции путём.
  */
 function select(rows, securities, opts = {}) {
-  const { minValue, minAtr } = { ...DEFAULTS, ...opts };
+  const { minValue, minAtr, board = BOARD, mandatory = null } = { ...DEFAULTS, ...opts };
   const allowed = parseTypes(opts.secTypes ?? DEFAULTS.secTypes);
   const out = [];
-  const stats = { type: 0, turnover: 0, atr: 0 };
+  const stats = { type: 0, turnover: 0, atr: 0, extra: 0 };
   for (const r of rows) {
     const sec = securities.get(r.SECID);
-    if (!sec || !allowed.has(sec.sectype)) { stats.type++; continue; }
-    if (!(Number(r.VALUE) >= minValue) || !(Number(r.VOLUME) > 0)) { stats.turnover++; continue; }
-    if (!sec.minstep) continue;
-    const high = Number(r.HIGH);
-    const low = Number(r.LOW);
-    if (!(high > 0) || !(low > 0)) continue;
+    if (!sec) continue;
+    // Обязательные тикеры (фьючерсы) идут в список всегда: MINSTEP у них
+    // свой, а отсев по обороту и ATR к ним не применяется.
+    const forced = mandatory !== null && mandatory.includes(r.SECID);
+    if (!forced) {
+      if (!allowed.has(sec.sectype)) { stats.type++; continue; }
+      if (!(num(r.VALUE) >= minValue) || !(num(r.VOLUME) > 0)) { stats.turnover++; continue; }
+    }
+    if (!sec.minstep) { if (forced) stats.extra++; continue; }
+    const high = num(r.HIGH);
+    const low = num(r.LOW);
+    if (!(high > 0) || !(low > 0)) { if (forced) stats.extra++; continue; }
     const atr = (high - low) / sec.minstep;
-    if (atr < minAtr) { stats.atr++; continue; }
-    const close = Number(r.CLOSE);
-    const open = Number(r.OPEN);
+    if (!forced && atr < minAtr) { stats.atr++; continue; }
+    const close = num(r.CLOSE);
+    const open = num(r.OPEN);
     out.push({
       secid: r.SECID,
-      name: r.SHORTNAME || '',
+      name: r.SHORTNAME || sec.name || '',
+      board,
       atr: Math.round(atr * 10) / 10,
       step: sec.minstep,
       // CLOSE > OPEN — зелёный, иначе красный (включая равные свечи)
       flag: close > open ? 'green' : 'red',
       change: open ? Math.round(((close - open) / open) * 10000) / 100 : 0,
       close,
-      value: Number(r.VALUE)
+      value: num(r.VALUE)
     });
   }
   // Сначала самые волатильные — их интереснее смотреть
@@ -142,10 +183,10 @@ function tradeDateToUtc(dateStr) {
 }
 
 /** Дневная история по одному тикеру. */
-async function fetchCandles(secid, from, till) {
+async function fetchCandles(secid, from, till, board = BOARD) {
   const cols = 'TRADEDATE,OPEN,LOW,HIGH,CLOSE,VOLUME';
   const j = await getJson(
-    `${ISS}/history/engines/${BOARD}/securities/${secid}.json?from=${from}&till=${till}` +
+    `${ISS}/history/engines/${board}/securities/${secid}.json?from=${from}&till=${till}` +
       `&iss.meta=off&iss.only=history&history.columns=${cols}`
   );
   if (!j.history?.data) return [];
@@ -154,11 +195,11 @@ async function fetchCandles(secid, from, till) {
   return j.history.data
     .map(r => ({
       time: tradeDateToUtc(r[idx.TRADEDATE]),
-      open: Number(r[idx.OPEN]),
-      high: Number(r[idx.HIGH]),
-      low: Number(r[idx.LOW]),
-      close: Number(r[idx.CLOSE]),
-      volume: Number(r[idx.VOLUME]) || 0
+      open: num(r[idx.OPEN]),
+      high: num(r[idx.HIGH]),
+      low: num(r[idx.LOW]),
+      close: num(r[idx.CLOSE]),
+      volume: num(r[idx.VOLUME]) || 0
     }))
     .filter(c => Number.isFinite(c.time) && c.open > 0)
     .sort((a, b) => a.time - b.time);
@@ -173,12 +214,12 @@ function shiftDate(dateStr, days) {
  * Минутные свечи за один день. ISS отдаёт по 500 строк, поэтому листаем start.
  * У блока candles нет колонки time — время бара лежит в begin.
  */
-async function fetchDayMinutes(secid, date, maxPages = 12) {
+async function fetchDayMinutes(secid, date, board = BOARD, maxPages = 12) {
   const out = [];
   let start = 0;
   for (let page = 0; page < maxPages; page++) {
     const j = await getJson(
-      `${ISS}/engines/${BOARD}/securities/${secid}/candles.json` +
+      `${ISS}/engines/${board}/securities/${secid}/candles.json` +
         `?interval=1&from=${date}&till=${date}&start=${start}&iss.meta=off`
     );
     const b = j.candles;
@@ -187,9 +228,9 @@ async function fetchDayMinutes(secid, date, maxPages = 12) {
     b.columns.forEach((c, i) => (idx[c] = i));
     for (const r of b.data) {
       out.push({
-        high: Number(r[idx.high]),
-        low: Number(r[idx.low]),
-        volume: Number(r[idx.volume]) || 0
+        high: num(r[idx.high]),
+        low: num(r[idx.low]),
+        volume: num(r[idx.volume]) || 0
       });
     }
     if (b.data.length < 500) break;
@@ -254,9 +295,9 @@ function computePoc(minutes, minstep) {
 }
 
 /** POC последнего дня для тикера; при неудаче — null, скрипт не падает. */
-async function fetchPoc(secid, date, minstep) {
+async function fetchPoc(secid, date, minstep, board) {
   try {
-    return computePoc(await fetchDayMinutes(secid, date), minstep);
+    return computePoc(await fetchDayMinutes(secid, date, board), minstep);
   } catch {
     return null;
   }
@@ -269,16 +310,34 @@ async function run(opts = {}) {
   const rows = await fetchDayRows(date);
   const securities = await fetchSecurities();
   const { picked, stats } = select(rows, securities, o);
+
+  // Фьючерсы: другая площадка и другой набор тикеров, но ATR и POC
+  // считаются теми же функциями. Их не берёт findLastTradingDate для TQBR,
+  // поэтому день берём тот же, что и для акций.
+  const futures = [];
+  if (o.futures && EXTRA_FUTURES.length) {
+    try {
+      const fRows = await fetchDayRows(date, BOARDS.forts);
+      const fSec = await fetchSecurities(BOARDS.forts);
+      const res = select(fRows, fSec, { ...o, board: BOARDS.forts, mandatory: EXTRA_FUTURES });
+      futures.push(...res.picked);
+      log(`  фьючерсы: ${res.picked.map(f => f.secid).join(', ') || '—'}`);
+    } catch (e) {
+      log(`  фьючерсы не получены: ${e.message}`);
+    }
+  }
+
+  const all = [...futures, ...picked];
   const from = shiftDate(date, Math.ceil(o.historyDays * 1.6));
   const candles = {};
-  for (const p of picked) {
+  for (const p of all) {
     try {
-      candles[p.secid] = await fetchCandles(p.secid, from, date);
+      candles[p.secid] = await fetchCandles(p.secid, from, date, p.board);
     } catch {
       candles[p.secid] = [];
     }
     // POC дня: цена, где накопилось больше всего объёма
-    const poc = o.poc ? await fetchPoc(p.secid, date, p.step) : null;
+    const poc = o.poc ? await fetchPoc(p.secid, date, p.step, p.board) : null;
     if (poc) {
       p.poc = poc.price;
       p.pocShare = poc.share;
@@ -293,15 +352,17 @@ async function run(opts = {}) {
       minAtr: o.minAtr,
       historyDays: o.historyDays,
       secTypes: o.secTypes,
-      poc: o.poc
+      poc: o.poc,
+      futures: o.futures ? EXTRA_FUTURES : []
     },
     counts: {
       total: rows.length,
-      picked: picked.length,
+      picked: all.length,
       ...stats,
-      withPoc: picked.filter(p => typeof p.poc === 'number').length
+      futures: futures.length,
+      withPoc: all.filter(p => typeof p.poc === 'number').length
     },
-    watchlist: picked,
+    watchlist: all,
     candles
   };
 }
@@ -336,16 +397,18 @@ const opts = {
   minAtr: arg('atr', DEFAULTS.minAtr),
   historyDays: arg('days', DEFAULTS.historyDays),
   secTypes: argStr('types', DEFAULTS.secTypes),
-  poc: argBool('poc', DEFAULTS.poc)
+  poc: argBool('poc', DEFAULTS.poc),
+  futures: argBool('futures', DEFAULTS.futures)
 };
 
 const log = (...a) => console.log(...a);
 
-log('Отбор акций MOEX, TQBR');
+log('Отбор акций MOEX, TQBR + фьючерсы RFUD');
 log(`  оборот от ${opts.minValue.toLocaleString('ru')} руб.`);
 log(`  ATR от ${opts.minAtr} пунктов`);
 log(`  история ${opts.historyDays} торговых дней`);
 log(`  типы бумаг: ${[...parseTypes(opts.secTypes)].join(', ')} (1 = ао, 2 = ап)`);
+log(`  фьючерсы всегда: ${opts.futures ? EXTRA_FUTURES.join(', ') : 'нет'}`);
 log(`  POC последнего дня: ${opts.poc ? 'да' : 'нет'}`);
 log('');
 
@@ -354,18 +417,25 @@ try {
   const json = JSON.stringify(data);
   await writeFile(new URL('./data.json', import.meta.url), json, 'utf8');
 
-  log(`Торговая сессия: ${data.tradedate}`);
-  log(`Акций в отборе: ${data.counts.picked} из ${data.counts.total}`);
-  log(`  отсеяно: не та бумага (ETF/ПИФ/облигация/расписка) — ${data.counts.type}, оборот — ${data.counts.turnover}, ATR — ${data.counts.atr}`);
-  const green = data.watchlist.filter(w => w.flag === 'green').length;
-  log(`  зелёных: ${green}, красных: ${data.counts.picked - green}`);
-  if (opts.poc) log(`  POC посчитан: ${data.counts.withPoc} из ${data.counts.picked}`);
-  log(`data.json: ${(json.length / 1024).toFixed(1)} КБ`);
+log(`Торговая сессия: ${data.tradedate}`);
+log(`Акций в отборе: ${data.counts.picked} из ${data.counts.total}`);
+log(`  отсеяно: не та бумага (ETF/ПИФ/облигация/расписка) — ${data.counts.type}, оборот — ${data.counts.turnover}, ATR — ${data.counts.atr}`);
+log(`  фьючерсов добавлено: ${data.counts.futures}`);
+const green = data.watchlist.filter(w => w.flag === 'green').length;
+log(`  зелёных: ${green}, красных: ${data.counts.picked - green}`);
+if (opts.poc) log(`  POC посчитан: ${data.counts.withPoc} из ${data.counts.picked}`);
+log(`data.json: ${(json.length / 1024).toFixed(1)} КБ`);
 
-  for (const w of data.watchlist.slice(0, 10)) {
-    const poc = typeof w.poc === 'number' ? `  POC ${w.poc}` : '  POC —';
-    log(`  ${w.flag === 'green' ? '+' : '-'} ${w.secid.padEnd(8)} ATR ${String(w.atr).padStart(7)}  ${w.change > 0 ? '+' : ''}${w.change}%  ${w.name}${poc}`);
-  }
+const show = w => {
+  const poc = typeof w.poc === 'number' ? `  POC ${w.poc}` : '  POC —';
+  const kind = w.board === BOARDS.shares ? '' : ' [ф]';
+  log(`  ${w.flag === 'green' ? '+' : '-'} ${w.secid.padEnd(8)} ATR ${String(w.atr).padStart(7)}  ${w.change > 0 ? '+' : ''}${w.change}%${kind}  ${w.name}${poc}`);
+};
+for (const w of data.watchlist.slice(0, 10)) show(w);
+if (data.watchlist.length > 10) {
+  log(`  ...ещё ${data.watchlist.length - 10}`);
+  for (const w of data.watchlist.filter(w => w.board !== BOARDS.shares)) show(w);
+}
   if (data.watchlist.length > 10) log(`  ...ещё ${data.watchlist.length - 10}`);
   log('');
   log('Готово.');

@@ -30,6 +30,11 @@
   .tick-sub{font-size:11px;color:var(--muted)}
   .up{color:var(--green)} .down{color:var(--red)}
   .spacer{flex:1}
+  .sess{display:flex;align-items:center;gap:6px;padding:4px 12px;border:1px solid var(--border);border-radius:6px;background:rgba(255,255,255,.02);font-size:15px;color:var(--text);white-space:nowrap;font-variant-numeric:tabular-nums}
+  .sess .sess-lbl{color:var(--muted)}
+  .sess .sess-sep{color:var(--muted)}
+  .sess b{font-weight:700}
+  @media (max-width:900px){ .sess{order:3;width:100%;justify-content:center} }
   .tf-group{display:flex;border:1px solid var(--border);border-radius:6px;overflow:hidden}
   .tf-group button{background:transparent;border:0;color:var(--muted);cursor:pointer;padding:6px 14px;font:inherit;font-size:12px;font-weight:700}
   .tf-group button + button{border-left:1px solid var(--border)}
@@ -93,12 +98,23 @@
     <div class="tick-sub" id="tick-sub">Загрузка…</div>
   </div>
   <div class="spacer"></div>
+  <div class="sess">
+    <span class="sess-lbl">Отбор</span>
+    <b id="sess-date">—</b>
+    <span class="sess-sep">·</span>
+    <span id="sess-count">—</span>
+  </div>
+  <div class="spacer"></div>
   <div class="tf-group" id="tf">
     <button data-tf="1">1 мин</button>
     <button data-tf="5">5 мин</button>
     <button data-tf="60">1 ч</button>
     <button data-tf="1440" class="active">1 д</button>
     <button data-tf="10080">1 нед</button>
+  </div>
+  <div class="tf-group" id="ct">
+    <button data-ct="candles" class="active">Свечи</button>
+    <button data-ct="bars">Бары</button>
   </div>
 </header>
 
@@ -135,7 +151,7 @@
 
 <footer>
   <span id="upd">Загрузка data.json…</span>
-  <span>Данные: data.json · Скрининг TQBR</span>
+  <span>Данные: data.json · Скрининг TQBR + RFUD</span>
 </footer>
 
 <script>
@@ -143,8 +159,27 @@
 'use strict';
 
 const DATA_URL = 'https://raw.githubusercontent.com/jordan23bull-afk/twfree/main/data.json';
-const ISS_CANDLES = 'https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities/';
+const ISS = 'https://iss.moex.com/iss';
+const ISS_CANDLES = `${ISS}/engines/stock/markets/shares/boards/TQBR/securities/`;
 const VOL_COLOR = 'rgba(125,135,148,0.45)';
+
+/**
+ * Путь ISS у каждого тикера свой: акции лежат на TQBR, фьючерсы — на RFUD.
+ * Скринер кладёт его в data.json полем board, поэтому здесь ничего не зашито.
+ */
+function candlesUrl(secid) {
+  const meta = (state.wl || []).find(t => t.secid === secid) || {};
+  if (meta.board) return `${ISS}/engines/${meta.board}/securities/${secid}/candles.json`;
+  return `${ISS_CANDLES}${secid}/candles.json`;
+}
+
+/** Подпись площадки в шапке: у акций TQBR, у фьючерсов RFUD. */
+function boardLabel(meta) {
+  const b = meta && meta.board;
+  if (!b) return 'MOEX (TQBR)';
+  const m = /boards\/([^/]+)$/.exec(b);
+  return m && m[1] !== 'TQBR' ? `MOEX (${m[1]}) · фьючерс` : 'MOEX (TQBR)';
+}
 
 const state = { secid: null, tf: 1440, data: [], wl: [], date: null, cache: {} };
 
@@ -234,7 +269,7 @@ function openTicker(ticker, force) {
   state.secid = ticker;
   const meta = state.wl.find(t => t.secid === ticker) || {};
   $('tick-name').textContent = ticker;
-  $('tick-sub').textContent = `${ticker} · MOEX (TQBR)` + (meta.name ? ` · ${meta.name}` : '');
+  $('tick-sub').textContent = boardLabel(meta) + (meta.name ? ` · ${meta.name}` : '');
   $('legend-name').textContent = ticker;
   const flags = meta.flag
     ? `<span class="up">ATR ${meta.atr} п.</span> · <span class="${meta.change >= 0 ? 'up' : 'down'}">${meta.change >= 0 ? '+' : ''}${String(meta.change).replace('.', ',')}%</span> · <span style="color:var(--${meta.flag})">${meta.flag === 'green' ? 'рост' : 'падение'}</span>`
@@ -334,16 +369,41 @@ const candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
   wickUpColor: '#089982', wickDownColor: '#f23645',
   borderVisible: false, priceLineColor: '#404a58'
 });
+const barSeries = chart.addSeries(LightweightCharts.BarSeries, {
+  upColor: '#089982', downColor: '#f23645',
+  thinBars: false, openVisible: true, priceLineColor: '#404a58'
+});
+let priceSeries = candleSeries;
+const setVisible = (s, v) => s.applyOptions({ visible: v });
+setVisible(barSeries, false);
 const volSeries = chart.addSeries(LightweightCharts.HistogramSeries, {
   priceScaleId: 'vol', priceFormat: { type: 'volume' },
   lastValueVisible: false, priceVisible: false
 });
 let pocLine = null;
+let pocSeries = null;
 chart.priceScale('vol').applyOptions({ scaleMargins: { top: .82, bottom: 0 } });
 
 chart.subscribeCrosshairMove(p => {
-  const c = p && p.seriesData.get(candleSeries);
+  const c = p && p.seriesData.get(priceSeries);
   setLegend(c && c.open != null ? c : state.data[state.data.length - 1], p && p.time);
+});
+
+/* ============ тип графика ============ */
+function setChartType(type) {
+  priceSeries = type === 'bars' ? barSeries : candleSeries;
+  setVisible(candleSeries, priceSeries === candleSeries);
+  setVisible(barSeries, priceSeries === barSeries);
+  priceSeries.setData(state.data || []);
+  setPoc();
+  showLastBar();
+}
+
+$('ct').addEventListener('click', e => {
+  const b = e.target.closest('button[data-ct]');
+  if (!b) return;
+  document.querySelectorAll('#ct button').forEach(x => x.classList.toggle('active', x === b));
+  setChartType(b.dataset.ct);
 });
 
 /* ============ таймфреймы ============ */
@@ -362,7 +422,7 @@ async function loadFromMoex(tf) {
   const till = new Date(now + 864e5).toISOString().slice(0, 10);
   let all = [], start = 0;
   for (let page = 0; page < cfg.pages; page++) {
-    const url = `${ISS_CANDLES}${state.secid}/candles.json?interval=${cfg.interval}&from=${from}&till=${till}&start=${start}`;
+    const url = `${candlesUrl(state.secid)}?interval=${cfg.interval}&from=${from}&till=${till}&start=${start}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const j = await res.json();
@@ -407,10 +467,11 @@ function showLastBar() {
  * а заголовок серии перекрывался визуально. Уровень читается на любой ТФ.
  */
 function setPoc() {
-  if (pocLine) { candleSeries.removePriceLine(pocLine); pocLine = null; }
+  if (pocLine) { pocSeries.removePriceLine(pocLine); pocLine = pocSeries = null; }
   const meta = (state.wl || []).find(t => t.secid === state.secid);
   if (typeof meta?.poc !== 'number' || !(meta.poc > 0)) return;
-  pocLine = candleSeries.createPriceLine({
+  pocSeries = priceSeries;
+  pocLine = pocSeries.createPriceLine({
     price: meta.poc,
     color: '#f0b90b',
     lineWidth: 1,
@@ -432,7 +493,7 @@ async function applyTF(tf) {
     rows = await loadFromMoex(tf);
   }
   state.data = rows;
-  candleSeries.setData(rows);
+  priceSeries.setData(rows);
   volSeries.setData(rows.map(c => ({ time: c.time, value: c.volume, color: VOL_COLOR })));
   setPoc();
   showLastBar();
@@ -471,6 +532,15 @@ function footerText() {
   return `Сессия ${state.date || '—'} · ${state.wl.length} акций`;
 }
 
+function setSession() {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(state.date || ''));
+  $('sess-date').textContent = m ? `${m[3]}.${m[2]}.${m[1]}` : '—';
+  const n = state.wl.length;
+  const word = n % 10 === 1 && n % 100 !== 11 ? 'тикер'
+    : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? 'тикера' : 'тикеров';
+  $('sess-count').textContent = `${n} ${word}`;
+}
+
 /* ============ старт ============ */
 (async () => {
   try {
@@ -479,6 +549,7 @@ function footerText() {
     state.date = data.tradedate;
     state.cache = data.candles || {};
     state.secid = state.wl[0] ? state.wl[0].secid : null;
+    setSession();
     if (state.secid) {
       renderList();
       openTicker(state.secid, true);
