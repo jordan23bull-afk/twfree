@@ -397,6 +397,7 @@ function setChartType(type) {
   priceSeries.setData(state.data || []);
   setPoc();
   showLastBar();
+  fitPrice(state.data || []);
 }
 
 $('ct').addEventListener('click', e => {
@@ -462,6 +463,32 @@ function showLastBar() {
 }
 
 /**
+ * Ценовая шкала подгоняется под данные явно, через setVisibleRange.
+ *
+ * Автоподгонка Lightweight Charts при setData не всегда срабатывает: если
+ * пользователь до этого двигал или зумил шкалу, она остаётся в прежних
+ * границах. На минутных ТФ это и выглядит как «график улетел за экран» —
+ * переключил тикер с ценой 20 ₽ на 6000 ₽, а шкала осталась от 0 до 30.
+ * Считаем min/max по загруженным барам и задаём диапазон руками.
+ *
+ * Поля повторяют scaleMargins шкалы (сверху 8%, снизу 24% под объём),
+ * потому что при явном setVisibleRange margins не применяются.
+ */
+function fitPrice(rows) {
+  const pad = { top: .08, bottom: .24 };
+  let lo = Infinity, hi = -Infinity;
+  for (const r of rows) {
+    if (!(r.low > 0) || !(r.high > 0)) continue;
+    if (r.low < lo) lo = r.low;
+    if (r.high > hi) hi = r.high;
+  }
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return;
+  if (hi === lo) { lo -= 1; hi += 1; }
+  const span = (hi - lo) / (1 - pad.top - pad.bottom);
+  chart.priceScale('right').setVisibleRange({ from: lo - span * pad.bottom, to: hi + span * pad.top });
+}
+
+/**
  * POC последнего дня: горизонтальный уровень на графике.
  * Отрезком в один бар не рисуем — он вырождался в несколько пикселей,
  * а заголовок серии перекрывался визуально. Уровень читается на любой ТФ.
@@ -497,6 +524,7 @@ async function applyTF(tf) {
   volSeries.setData(rows.map(c => ({ time: c.time, value: c.volume, color: VOL_COLOR })));
   setPoc();
   showLastBar();
+  fitPrice(rows);
   $('legend-tf').textContent = cfg.label;
   setLegend(rows[rows.length - 1]);
 }
