@@ -1,9 +1,6 @@
 name: Обновить data.json
 
 on:
-  schedule:
-    # 00:10 по Москве: МСК = UTC+3 без перехода на летнее время, 21:10 UTC
-    - cron: '10 21 * * *'
   workflow_dispatch:
 
 permissions:
