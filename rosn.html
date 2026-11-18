@@ -107,7 +107,7 @@
   <div class="spacer"></div>
   <div class="tf-group" id="tf">
     <button data-tf="1">1 мин</button>
-    <button data-tf="5">5 мин</button>
+    <button data-tf="10">10 мин</button>
     <button data-tf="60">1 ч</button>
     <button data-tf="1440" class="active">1 д</button>
     <button data-tf="10080">1 нед</button>
@@ -181,7 +181,7 @@ function boardLabel(meta) {
   return m && m[1] !== 'TQBR' ? `MOEX (${m[1]}) · фьючерс` : 'MOEX (TQBR)';
 }
 
-const state = { secid: null, tf: 1440, data: [], wl: [], date: null, cache: {} };
+const state = { secid: null, tf: 1440, data: [], wl: [], date: null, cache: {}, tfNote: null };
 
 const $ = id => document.getElementById(id);
 const fmt = v => (v == null || isNaN(v)) ? '—' :
@@ -409,10 +409,16 @@ $('ct').addEventListener('click', e => {
 
 /* ============ таймфреймы ============ */
 const TFS = {
-  1:     { label: '1 мин',  interval: 1,  days: 4,   pages: 6, fromData: false },
-  5:     { label: '5 мин',  interval: 1,  days: 4,   pages: 6, fromData: false },
+  // pages — не число страниц запроса, а кап на итоговый срез: ISS отдаёт
+  // по 500 свечей за запрос, а пагинация всегда от старых к свежим,
+  // поэтому собираем до конца и берём хвост — обрезается старое, не свежее.
+  1:     { label: '1 мин',  interval: 1,  days: 4,   pages: 10, fromData: false },
+  // Биржевых пятиминуток нет (ISS умеет только 1/10/60/24/7/31), поэтому
+  // второй ТФ — нативные десятиминутки без пересчёта из минуток.
+  10:    { label: '10 мин', interval: 10, days: 30,  pages: 10, fromData: false },
   60:    { label: '1 ч',    interval: 60, days: 30,  pages: 4, fromData: false },
-  1440:  { label: '1 д',    interval: 24, days: 800, pages: 4, fromData: true },
+  // Дневные: живые с ISS, при сбое сети — кэш из data.json (см. applyTF)
+  1440:  { label: '1 д',    interval: 24, days: 180, pages: 1, fromData: false },
   10080: { label: '1 нед',  interval: 7,  days: 4000, pages: 4, fromData: false }
 };
 
@@ -422,7 +428,9 @@ async function loadFromMoex(tf) {
   const from = new Date(now - cfg.days * 864e5).toISOString().slice(0, 10);
   const till = new Date(now + 864e5).toISOString().slice(0, 10);
   let all = [], start = 0;
-  for (let page = 0; page < cfg.pages; page++) {
+  // ISS отдаёт по 500 свечей и листает от старых к свежим: идём до пустой
+  // страницы (safety 20 страниц), потом срезаем старое — свежие бары важнее.
+  for (let page = 0; page < 20; page++) {
     const url = `${candlesUrl(state.secid)}?interval=${cfg.interval}&from=${from}&till=${till}&start=${start}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -433,26 +441,22 @@ async function loadFromMoex(tf) {
     if (data.length < 500) break;
     start += data.length;
   }
+  const cap = cfg.pages * 500;
+  if (all.length > cap) all = all.slice(-cap);
   if (!all.length) throw new Error('пустой ответ');
-  return aggregate(all, tf);
+  return toBars(all);
 }
 
-function aggregate(rows, tf) {
-  const span = tf * 60, out = [];
-  let cur = null;
-  for (const r of rows) {
-    const t = Math.floor(parseTs(r.begin) / span) * span;
-    if (!cur || cur.time !== t) {
-      cur = { time: t, open: +r.open, high: +r.high, low: +r.low, close: +r.close, volume: +r.volume || 0 };
-      out.push(cur);
-    } else {
-      cur.high = Math.max(cur.high, +r.high);
-      cur.low  = Math.min(cur.low,  +r.low);
-      cur.close = +r.close;
-      cur.volume += (+r.volume || 0);
-    }
-  }
-  return out;
+/** Строки ISS (время в begin) -> бары для графика. */
+function toBars(rows) {
+  return rows.map(r => ({
+    time: parseTs(r.begin),
+    open: +r.open,
+    high: +r.high,
+    low: +r.low,
+    close: +r.close,
+    volume: +r.volume || 0
+  }));
 }
 
 /** После любой перерисовки: последняя свеча в кадре, справа пусто RIGHT_OFFSET свечей. */
@@ -517,7 +521,21 @@ async function applyTF(tf) {
     rows = (state.cache && state.cache[state.secid]) || [];
     if (!rows.length) throw new Error('нет дневных данных в data.json');
   } else {
-    rows = await loadFromMoex(tf);
+    try {
+      rows = await loadFromMoex(tf);
+      state.tfNote = null;
+    } catch (e) {
+      // Дневки и офлайн: сначала кэш из data.json, ошибка — только если там пусто.
+      const cached = ((state.cache && state.cache[state.secid]) || []).filter(
+        c => !(tf === 1440) || c.time * 1000 >= Date.now() - cfg.days * 864e5
+      );
+      if (tf === 1440 && cached.length) {
+        rows = cached;
+        state.tfNote = 'из data.json (биржа недоступна)';
+      } else {
+        throw e;
+      }
+    }
   }
   state.data = rows;
   priceSeries.setData(rows);
@@ -557,7 +575,8 @@ $('tf').addEventListener('click', async e => {
 });
 
 function footerText() {
-  return `Сессия ${state.date || '—'} · ${state.wl.length} акций`;
+  const base = `Сессия ${state.date || '—'} · ${state.wl.length} акций`;
+  return state.tfNote ? `${base} · ${state.tfNote}` : base;
 }
 
 function setSession() {
