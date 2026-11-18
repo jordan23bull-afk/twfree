@@ -213,15 +213,30 @@ function shiftDate(dateStr, days) {
 /**
  * Минутные свечи за один день. ISS отдаёт по 500 строк, поэтому листаем start.
  * У блока candles нет колонки time — время бара лежит в begin.
+ *
+ * Минутные эндпоинты иногда отвечают 5xx или пустым списком — POC из-за этого
+ * молча пропадал у части тикеров. Повторяем неудачные запросы с задержкой;
+ * пустая *первая* страница тоже считается подозрительной, пустая последующая —
+ * нормальный конец данных.
  */
 async function fetchDayMinutes(secid, date, board = BOARD, maxPages = 12) {
   const out = [];
   let start = 0;
   for (let page = 0; page < maxPages; page++) {
-    const j = await getJson(
+    const url =
       `${ISS}/engines/${board}/securities/${secid}/candles.json` +
-        `?interval=1&from=${date}&till=${date}&start=${start}&iss.meta=off`
-    );
+      `?interval=1&from=${date}&till=${date}&start=${start}&iss.meta=off`;
+    let j;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        j = await getJson(url);
+        if (j.candles?.data?.length || page > 0) break;
+        throw new Error('первая страница минуток пуста');
+      } catch (e) {
+        if (attempt === 2) throw e;
+        await new Promise(r => setTimeout(r, 250 * (attempt + 1)));
+      }
+    }
     const b = j.candles;
     if (!b?.data?.length) break;
     const idx = {};
@@ -297,8 +312,11 @@ function computePoc(minutes, minstep) {
 /** POC последнего дня для тикера; при неудаче — null, скрипт не падает. */
 async function fetchPoc(secid, date, minstep, board) {
   try {
-    return computePoc(await fetchDayMinutes(secid, date, board), minstep);
-  } catch {
+    const poc = computePoc(await fetchDayMinutes(secid, date, board), minstep);
+    if (!poc) log(`  POC не посчитан: ${secid} — нет минуток с объёмом`);
+    return poc;
+  } catch (e) {
+    log(`  POC не посчитан: ${secid} — ${e.message}`);
     return null;
   }
 }
